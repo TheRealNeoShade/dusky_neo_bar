@@ -61,7 +61,7 @@ The setup scripts are written to auto detect your hardware and set the appropria
 
 # Installation 💿
 
-[Watch Video Tutorial][video]
+[Watch Video Tutorial][Watch Video Tutorial]
 
 [Watch Video Tutorial]: https://youtu.be/OzeFAY_8T8Y
 
