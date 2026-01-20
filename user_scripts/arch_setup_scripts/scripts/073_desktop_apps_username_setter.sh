@@ -3,7 +3,7 @@
 #  Arch Linux Desktop Entry Path Fixer
 #  Environment: Hyprland / UWSM
 #  Description: Surgical update of 'Exec' paths in .desktop files to match $USER.
-#  Version: 2.0.0
+#  Version: 2.1.0
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -17,7 +17,7 @@ cleanup() {
     # If exit code is > 128, it was a signal (interrupt/kill)
     if (( code > 128 )); then
         printf '\n%s⚠ Script Interrupted (Signal %d)%s\n' \
-            "${C_YELLOW:-}" "$((code - 128))" "${C_RESET:-}"
+            "${C_YELLOW:-}" "$((code - 128))" "${C_RESET:-}" >&2
     fi
 }
 trap cleanup EXIT
@@ -150,6 +150,13 @@ file_needs_update() {
 # 4. Main Logic
 # ------------------------------------------------------------------------------
 main() {
+    # Check for quiet flag immediately
+    # Redirects stdout (FD 1) to /dev/null if flag is present.
+    # Stderr (FD 2) remains active for critical errors.
+    if [[ "${1:-}" == "--quiet" ]]; then
+        exec 1>/dev/null
+    fi
+
     local filename filepath
     local -i updated_count=0 skipped_count=0 missing_count=0
 

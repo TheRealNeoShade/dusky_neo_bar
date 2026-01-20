@@ -243,7 +243,7 @@ declare -ra UPDATE_SEQUENCE=(
 #    "U | 070_reverting_sleep_timeout.sh"
 #    "U | 071_clipboard_persistance.sh"
 #    "S | 072_intel_media_sdk_check.sh"
-    "U | 073_desktop_apps_username_setter.sh"
+    "U | 073_desktop_apps_username_setter.sh --quiet"
 #    "U | 074_firefox_matugen_pywalfox.sh"
 #    "U | 075_spicetify_matugen_setup.sh"
 #    "U | 076_waybar_swap_config.sh"
