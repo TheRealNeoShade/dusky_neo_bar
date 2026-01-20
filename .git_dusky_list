@@ -6,7 +6,14 @@
 .config/fontconfig/
 .config/gtk-3.0/settings.ini
 .config/gtk-4.0/settings.ini
-.config/hypr/
+.config/hypr/hyprlock_themes/
+.config/hypr/shaders/
+.config/hypr/source/
+.config/hypr/hypridle.conf
+.config/hypr/hyprland.conf
+.config/hypr/hyprlock.conf
+.config/hypr/hyprsunset.conf
+.config/hypr/xdph.conf
 .config/kitty/kitty.conf
 .config/kitty/instruction for theme.txt
 .config/matugen/config.toml
