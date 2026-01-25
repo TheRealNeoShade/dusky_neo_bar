@@ -325,7 +325,7 @@ window#waybar > box {
    ───────────────────────────────────────────────────────────────────────────── */
 
 #network {
-  padding: 0 8px;
+  padding: 1px 14px 0px 9px;
   margin: 5px 2px;
   border-radius: 10px;
   background-color: alpha(@surface_container, 0.6);
@@ -339,11 +339,13 @@ window#waybar > box {
 }
 
 #network.disconnected {
+  padding: 1px 14px 0px 9px;
   color: alpha(@on_surface_variant, 0.4);
 }
 
 #network.linked,
 #network.ethernet {
+  padding: 1px 13px 0px 9px;
   color: @tertiary;
 }
 
@@ -357,7 +359,7 @@ window#waybar > box {
    ───────────────────────────────────────────────────────────────────────────── */
 
 #bluetooth {
-  padding: 0px 8px 0px 6px;
+  padding: 0px 8px 0px 8px;
   margin: 5px 2px;
   border-radius: 10px;
   background-color: alpha(@surface_container, 0.6);
