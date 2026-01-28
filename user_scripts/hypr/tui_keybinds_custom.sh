@@ -230,7 +230,9 @@ main() {
         printf '  %sm%s  mouse            %s(For mouse clicks)%s\n\n' "$BOLD" "$RESET" "$BRIGHT_WHITE" "$RESET"
 
         # --- The Power Edit Prompt ---
-        if ! IFS= read -e -r -p "${PURPLE}> ${RESET}" -i "$current_input" user_line; then
+        local p_prompt=$'\001'"$PURPLE"$'\002> \001'"$RESET"$'\002'
+
+        if ! IFS= read -e -r -p "$p_prompt" -i "$current_input" user_line; then
             printf '\n%s[INFO]%s Edit cancelled.\n' "$YELLOW" "$RESET"
             exit 0
         fi
@@ -284,10 +286,19 @@ main() {
 
         if (( type_was_corrected )); then
             printf '\n%s[AUTO-FIX]%s Bind type corrected: "%s" → "%s"\n' "$CYAN" "$RESET" "$type" "$fixed_type"
+            printf '           %s[Enter]%s to accept fix, or %s[e]%s to edit manually.\n' "$BOLD" "$RESET" "$YELLOW" "$RESET"
+
+            local fix_choice
+            read -r -p "Select > " fix_choice
+
+            if [[ "${fix_choice,,}" == "e"* ]]; then
+                current_input="$user_line"
+                continue
+            fi
+
+            # User accepted fix (or pressed Enter)
             current_input="${fixed_type} = ${content}"
             user_line="${fixed_type} = ${content}"
-            printf '           Press Enter to continue with the corrected line...\n'
-            read -r
         fi
 
         # 5. Conflict Check
