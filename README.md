@@ -297,7 +297,7 @@ If you run into issues, check the detailed Obsidian notes included in the repo (
 
 
 
-Acknowledgments:
+# Acknowledgments:
 Thank you to all the Contributors!
 
 sddm is a modified version of the SilentSDDM project by @uiriansan (this is a great project! Kindly star it on github)
