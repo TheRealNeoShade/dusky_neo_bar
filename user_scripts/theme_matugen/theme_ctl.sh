@@ -49,8 +49,13 @@ MATUGEN_CONTRAST=""
 _TEMP_FILE=""
 
 cleanup() {
-    [[ -n "${_TEMP_FILE:-}" && -e "$_TEMP_FILE" ]] && rm -f "$_TEMP_FILE"
+    local exit_code=$?
+    if [[ -n "${_TEMP_FILE:-}" && -e "$_TEMP_FILE" ]]; then
+        rm -f "$_TEMP_FILE"
+    fi
+    exit "$exit_code"
 }
+
 trap cleanup EXIT
 
 # --- HELPER FUNCTIONS ---
