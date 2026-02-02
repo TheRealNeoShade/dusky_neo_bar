@@ -65,6 +65,7 @@ readonly TARGET_FILES=(
     "dusky_control_center.desktop"
     "dusky_input.desktop"
     "dusky_keybinds.desktop"
+    "dusky_waybars.desktop"
     "file_switcher.desktop"
     "google_image_search.desktop"
     "hypridle_timeout.desktop"
@@ -100,7 +101,6 @@ readonly TARGET_FILES=(
     "volume_slider.desktop"
     "update_dusky.desktop"
     "warp.desktop"
-    "waybar_config_switcher.desktop"
     "wayclick.desktop"
     "wifi_security.desktop"
 )
