@@ -11,9 +11,15 @@ Forensic Improvements (v2):
 - Resource Safety: CSS provider lifecycle is fully guarded against leaks.
 - UX: Hot reload preserves the currently selected page index.
 - Fix: Search results now correctly render Grid/Toggle cards as List rows.
+
+Daemon & Optimization Features (Implemented):
+- SINGLE INSTANCE: Uses Gtk.Application uniqueness. Second launch simply raises existing window.
+- RAM EFFICIENCY: Hides window on close; garbage collects to free memory.
+- DAEMON MODE: Process stays alive in background (sleeping) when window is closed.
 """
 from __future__ import annotations
 
+import gc
 import logging
 import sys
 import threading
@@ -279,7 +285,16 @@ class DuskyControlCenter(Adw.Application):
         Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.DEFAULT)
 
     def do_activate(self) -> None:
-        """Application entry point. Load config and build UI."""
+        """
+        Application entry point.
+        DAEMON LOGIC: If window exists, present it. Otherwise, build it.
+        """
+        # 1. Daemon Check: If window is already alive, just show it.
+        if self._window:
+            self._window.present()
+            return
+
+        # 2. Cold Start: Load config and build UI.
         result = self._load_config_and_css_sync()
         self._state.config = result["config"]
         self._state.css_content = result["css"]
@@ -287,6 +302,7 @@ class DuskyControlCenter(Adw.Application):
 
         self._apply_css()
         self._build_ui()
+        self._window.present()
 
     def do_shutdown(self) -> None:
         """Cleanup resources on application exit."""
@@ -437,6 +453,9 @@ class DuskyControlCenter(Adw.Application):
         """Construct and present the main application window."""
         self._window = Adw.Window(application=self, title=APP_TITLE)
         self._window.set_default_size(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
+        
+        # DAEMON LOGIC: Intercept close request to HIDE instead of destroy
+        self._window.connect("close-request", self._on_close_request)
 
         # Keyboard event handling
         key_ctrl = Gtk.EventControllerKey()
@@ -467,7 +486,14 @@ class DuskyControlCenter(Adw.Application):
         else:
             self._populate_pages()
 
-        self._window.present()
+    def _on_close_request(self, window: Adw.Window) -> bool:
+        """
+        Intercept window close. Return True to prevent destruction.
+        Hide window and GC to free RAM.
+        """
+        window.set_visible(False)
+        gc.collect()  # Explicitly free memory while hidden
+        return True
 
     def _on_key_pressed(
         self,
@@ -487,7 +513,9 @@ class DuskyControlCenter(Adw.Application):
                 self._activate_search()
                 return True
             case (True, Gdk.KEY_q):
-                self.quit()
+                # Close (Hide) via the window manager logic
+                if self._window:
+                    self._window.close()
                 return True
             case (False, Gdk.KEY_Escape):
                 if self._search_bar and self._search_bar.get_search_mode():
