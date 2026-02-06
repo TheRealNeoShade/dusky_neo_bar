@@ -165,7 +165,7 @@ pages:
     items:
     - type: grid_card
       properties:
-        title: Reload Hyprland
+        title: Hypr Reload
         icon: view-refresh-symbolic
       on_press:
         type: exec
@@ -173,7 +173,7 @@ pages:
         terminal: false
     - type: grid_card
       properties:
-        title: System Benchmark
+        title: Benchmark
         icon: utilities-system-monitor-symbolic
       on_press:
         type: exec
@@ -424,7 +424,7 @@ pages:
           terminal: false
     - type: toggle_card
       properties:
-        title: Wi-Fi Manager
+        title: Wi-Fi
         icon: network-wireless-symbolic
         state_command: nmcli radio wifi
         interval: 5
@@ -439,7 +439,7 @@ pages:
           terminal: false
     - type: toggle_card
       properties:
-        title: Bluetooth Manager
+        title: Bluetooth
         icon: bluetooth-active-symbolic
         state_command: "bluetoothctl show | grep 'Powered: yes' | awk '{print $2}'"
         interval: 5
@@ -514,7 +514,7 @@ pages:
         button_text: "Setup"
       on_press:
         type: exec
-        command: kitty --class ax201_wifi_testing.sh --hold sh -c ~/user_scripts/networking/ax201_wifi_testing.sh
+        command: kitty --class airmon_ng.sh --hold sh -c ~/user_scripts/networking/airmon_ng.sh
         terminal: false
 
 - id: hardware
