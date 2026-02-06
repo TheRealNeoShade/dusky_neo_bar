@@ -81,6 +81,24 @@ pages:
         type: exec
         command: $HOME/user_scripts/wlogout/wlogout_scale.sh
         terminal: false
+
+  - type: section
+    properties:
+      title: Power Management
+    items:
+    - type: selection
+      properties:
+        title: Active Profile
+        description: Select performance mode
+        icon: power-profile-balanced-symbolic
+        options:
+        - Balanced
+        - Performance
+        - Power Saver
+      on_change:
+        type: exec
+        command: "mode=$(echo '{value}' | tr '[:upper:]' '[:lower:]' | sed 's/ /-/g'); tlpctl $mode && notify-send 'Power Profile' 'Switched to {value}'"
+
   - type: section
     properties:
       title: Quick Controls
@@ -113,6 +131,7 @@ pages:
       on_change:
         type: exec
         command: brightnessctl set {value}%
+
   - type: section
     properties:
       title: Live System Status
@@ -136,48 +155,88 @@ pages:
   title: System
   icon: computer-symbolic
   layout:
-  - type: section
-    properties:
-      title: Power
-      icon: ''
-      description: ''
+  - type: grid_section
     items:
-    - type: button
+    - type: grid_card
       properties:
-        title: Power Menu
-        description: Shutdown, Reboot, Hibernate (Wlogout)
-        icon: system-log-out-symbolic
-        style: destructive
-        button_text: "Open"
-      on_press:
-        type: exec
-        command: $HOME/user_scripts/wlogout/wlogout_scale.sh
-        terminal: false
-    - type: button
-      properties:
-        title: Hyprland Reload
-        description: Reload Hyprland configuration
+        title: Reload Hyprland
         icon: view-refresh-symbolic
-        button_text: "Reload"
       on_press:
         type: exec
         command: hyprctl reload
         terminal: false
-  - type: section
-    properties:
-      title: Information & Updates
-      icon: ''
-      description: ''
-    items:
-    - type: button
+    - type: grid_card
+      properties:
+        title: System Benchmark
+        icon: utilities-system-monitor-symbolic
+      on_press:
+        type: exec
+        command: kitty --class sysbench_benchmark.sh --title "System Benchmark" --hold sh -c "$HOME/user_scripts/performance/sysbench_benchmark.sh"
+        terminal: false
+    - type: grid_card
       properties:
         title: About Dusky
-        description: View system version and details
         icon: help-about-symbolic
-        button_text: "View"
       on_press:
         type: redirect
         page: about_dusky
+
+  - type: section
+    properties:
+      title: Reset Dusky (takes 5 minutes)
+    items:
+    - type: button
+      properties:
+        title: 'Step 1: Deploy Dotfiles'
+        description: Force sync with Git (Overwrites local configs)
+        icon: folder-download-symbolic
+        style: destructive
+        button_text: "Deploy"
+      on_press:
+        type: exec
+        command: kitty --class deploy_dotfiles.sh --hold sh -c $HOME/user_scripts/arch_setup_scripts/deploy_dotfiles.sh
+        terminal: false
+    - type: button
+      properties:
+        title: 'Step 2: Orchestra'
+        description: Full system re-setup (Takes 5-10 mins)
+        icon: preferences-system-symbolic
+        style: destructive
+        button_text: "Start"
+      on_press:
+        type: exec
+        command: kitty --class ORCHESTRA.sh --hold sh -c $HOME/user_scripts/arch_setup_scripts/ORCHESTRA.sh
+        terminal: false
+
+  - type: section
+    properties:
+      title: Git Backup
+    items:
+    - type: button
+      properties:
+        title: Setup New Repo
+        description: Initialize a new GitHub repository for dotfiles
+        icon: folder-new-symbolic
+        button_text: "Setup"
+      on_press:
+        type: exec
+        command: kitty --class new_github_repo_to_backup.sh --hold sh -c "$HOME/user_scripts/desktop_apps/new_github_repo_to_backup.sh"
+        terminal: false
+    - type: button
+      properties:
+        title: Reconnect Repo
+        description: Reconnect and push local changes to remote
+        icon: network-server-symbolic
+        button_text: "Reconnect"
+      on_press:
+        type: exec
+        command: kitty --class reconnect_and_push_new_changes_to_github.sh --hold sh -c "$HOME/user_scripts/desktop_apps/reconnect_and_push_new_changes_to_github.sh"
+        terminal: false
+
+  - type: section
+    properties:
+      title: Dusky Updates
+    items:
     - type: button
       properties:
         title: System Updater
@@ -187,8 +246,7 @@ pages:
         button_text: "Update"
       on_press:
         type: exec
-        command: kitty --class update_dusky.sh --title "System Updater" --hold sh
-          -c "$HOME/user_scripts/update_dusky/update_dusky.sh"
+        command: kitty --class update_dusky.sh --title "System Updater" --hold sh -c "$HOME/user_scripts/update_dusky/update_dusky.sh"
         terminal: false
     - type: button
       properties:
@@ -210,78 +268,7 @@ pages:
         type: exec
         command: kitty --class send_logs.sh --hold sh -c "$HOME/user_scripts/arch_setup_scripts/send_logs.sh"
         terminal: false
-  - type: section
-    properties:
-      title: Performance
-      icon: ''
-      description: ''
-    items:
-    - type: button
-      properties:
-        title: System Benchmark
-        description: Run Sysbench performance test
-        icon: utilities-system-monitor-symbolic
-        button_text: "Run"
-      on_press:
-        type: exec
-        command: kitty --class sysbench_benchmark.sh --title "System Benchmark" --hold
-          sh -c "$HOME/user_scripts/performance/sysbench_benchmark.sh"
-        terminal: false
-  - type: section
-    properties:
-      title: Git Backup
-      icon: ''
-      description: ''
-    items:
-    - type: button
-      properties:
-        title: Setup New Repo
-        description: Initialize a new GitHub repository for dotfiles
-        icon: folder-new-symbolic
-        button_text: "Setup"
-      on_press:
-        type: exec
-        command: kitty --class new_github_repo_to_backup.sh --hold sh -c "$HOME/user_scripts/desktop_apps/new_github_repo_to_backup.sh"
-        terminal: false
-    - type: button
-      properties:
-        title: Push Changes
-        description: Reconnect and push local changes to remote
-        icon: network-server-symbolic
-        button_text: "Push"
-      on_press:
-        type: exec
-        command: kitty --class reconnect_and_push_new_changes_to_github.sh --hold
-          sh -c "$HOME/user_scripts/desktop_apps/reconnect_and_push_new_changes_to_github.sh"
-        terminal: false
-  - type: section
-    properties:
-      title: Reset
-      icon: ''
-      description: ''
-    items:
-    - type: button
-      properties:
-        title: 'Step 1: Deploy Dotfiles'
-        description: Force sync with Git (Overwrites local configs)
-        icon: folder-download-symbolic
-        style: destructive
-        button_text: "Deploy"
-      on_press:
-        type: exec
-        command: kitty --class deploy_dotfiles.sh --hold sh -c $HOME/user_scripts/arch_setup_scripts/deploy_dotfiles.sh
-        terminal: false
-    - type: button
-      properties:
-        title: 'Step 2: Orchestra'
-        description: Full system re-setup (Takes 5-10 mins)
-        icon: process-working-symbolic
-        style: destructive
-        button_text: "Start"
-      on_press:
-        type: exec
-        command: kitty --class ORCHESTRA.sh --hold sh -c $HOME/user_scripts/arch_setup_scripts/ORCHESTRA.sh
-        terminal: false
+
 - id: disk_and_files
   title: Disk & Files
   icon: drive-multidisk-symbolic
@@ -297,7 +284,7 @@ pages:
         title: Dysk Analysis
         description: Graphical disk space usage
         icon: drive-harddisk-symbolic
-        button_text: "Open"
+        button_text: "View"
       on_press:
         type: exec
         command: kitty --class dysk --title "Dysk Analysis" --hold sh -c "dysk"
@@ -307,7 +294,7 @@ pages:
         title: Disk I/O Monitor
         description: Real-time disk activity (TUI)
         icon: utilities-system-monitor-symbolic
-        button_text: "Open"
+        button_text: "Monitor"
       on_press:
         type: exec
         command: kitty --class io_monitor.sh --hold sh -c "$HOME/user_scripts/drives/io_monitor.sh"
@@ -324,7 +311,7 @@ pages:
         terminal: false
   - type: section
     properties:
-      title: Free Storage
+      title: Drive Management
       icon: ''
       description: ''
     items:
@@ -338,12 +325,6 @@ pages:
         type: exec
         command: kitty --class cache_purge.sh --hold sh -c "$HOME/user_scripts/desktop_apps/cache_purge.sh"
         terminal: false
-  - type: section
-    properties:
-      title: Drive Management
-      icon: ''
-      description: ''
-    items:
     - type: button
       properties:
         title: Fix NTFS Drives
@@ -676,7 +657,7 @@ pages:
         button_text: "Identify"
       on_press:
         type: exec
-        command: $HOME/user_scripts/music/music_recognition.sh
+        command: $HOME/user_scripts/music/recognition.sh
         terminal: false
     - type: button
       properties:
