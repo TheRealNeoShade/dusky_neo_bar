@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# Dusky TUI Engine - Master Template v3.2.0 (Stable & Hardened)
+# Dusky TUI Engine - Master Template v3.2.1 (Stable & Hardened)
 # -----------------------------------------------------------------------------
 # Target: Arch Linux / Hyprland / UWSM / Wayland
 # Requires: Bash 5.0+, GNU sed, GNU awk
 #
+# v3.2.1 CHANGELOG:
+#   - FIX: Soft-coded TAB_ROW for maintainable mouse regions.
 # v3.2.0 CHANGELOG:
 #   - SAFETY: Reverted broken block-parsing logic suggested by audit.
 #   - SAFETY: Retained whitespace separation for inline comments.
@@ -23,7 +25,7 @@ set -euo pipefail
 
 readonly CONFIG_FILE="${HOME}/.config/hypr/change_me.conf"
 readonly APP_TITLE="Dusky Template"
-readonly APP_VERSION="v3.2.0"
+readonly APP_VERSION="v3.2.1"
 
 # Dimensions & Layout
 declare -ri MAX_DISPLAY_ROWS=14
@@ -67,6 +69,7 @@ unset _h_line_buf
 #   Row 5: scroll indicator / blank
 #   Row 6: first item
 declare -ri HEADER_ROWS=4
+declare -ri TAB_ROW=3
 declare -ri ITEM_START_ROW=$(( HEADER_ROWS + 2 ))
 
 # --- ANSI Constants ---
@@ -641,8 +644,8 @@ handle_mouse() {
     # Only process press events (M = press, m = release)
     [[ "$terminator" != "M" ]] && return 0
 
-    # Tab bar click (row 3)
-    if (( y == 3 )); then
+    # Tab bar click (row TAB_ROW)
+    if (( y == TAB_ROW )); then
         for (( i = 0; i < TAB_COUNT; i++ )); do
             zone=${TAB_ZONES[i]}
             start=${zone%%:*}
