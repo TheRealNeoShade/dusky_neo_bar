@@ -802,6 +802,14 @@ pages:
           type: exec
           command: $HOME/user_scripts/theme_matugen/theme_ctl.sh set --mode light
           terminal: false
+    - type: grid_card
+      properties:
+        title: Presets
+        icon: style-symbolic
+      on_press:
+        type: exec
+        command: kitty --class dusky_matugen_presets.sh -e ~/user_scripts/theme_matugen/dusky_matugen_presets.sh
+        terminal: false
     - type: toggle_card
       properties:
         title: Blur
@@ -816,14 +824,6 @@ pages:
           type: exec
           command: $HOME/user_scripts/hypr/hypr_blur_opacity_shadow_toggle.sh
           terminal: false
-    - type: grid_card
-      properties:
-        title: Presets
-        icon: style-symbolic
-      on_press:
-        type: exec
-        command: kitty --class dusky_matugen_presets.sh -e ~/user_scripts/theme_matugen/dusky_matugen_presets.sh
-        terminal: false
 
   - type: section
     properties:
