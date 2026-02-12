@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# Dusky Waybar Manager - Unified Edition v4.4.1 (Stable)
+# Dusky Waybar Manager - Unified Edition v4.6.0 (TUI Engine v3.9.2 Core)
 # -----------------------------------------------------------------------------
 # Target: Arch Linux / Hyprland / UWSM / Wayland
 # Description: High-performance TUI for Waybar theme management.
-# Features:
-#   - FIXED: "M: unbound variable" crash (removed integer flag from string var).
-#   - FIXED: CPU spikes during scroll (Zero-fork debounce).
-#   - FIXED: Bounding box misalignment on selected items.
-#   - FIXED: Atomic file writes (prevents config corruption).
-#   - Live position toggling (Spacebar).
-#   - Mouse support (click, scroll).
+#
+# v4.6.0 CHANGELOG (Engine Alignment with TUI Master v3.9.2):
+#   - HARDENED: Ported robust Alt+Enter / TTY sequence detection.
+#   - HARDENED: Consistent variable quoting (e.g., array lengths).
+#   - REFACTOR: Abstracted render_scroll_indicator for UI decoupling.
+#   - REFACTOR: Ported strip_ansi (extglob) for dynamic header measuring.
+#   - UX: Mapped Backspace/Alt+Enter to toggle position (reverse).
+#   - NOTE: Retained sed for JSON modification (awk engine is Hyprland-specific).
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
+shopt -s extglob
 
 # Force standard C locale for numeric operations.
 export LC_NUMERIC=C
@@ -24,7 +26,7 @@ export LC_NUMERIC=C
 
 readonly CONFIG_ROOT="${HOME}/.config/waybar"
 readonly APP_TITLE="Dusky Waybar Manager"
-readonly APP_VERSION="v4.4.1"
+readonly APP_VERSION="v4.6.0"
 
 readonly -a UWSM_CMD=(uwsm-app -- waybar)
 
@@ -32,6 +34,9 @@ declare -ri MAX_DISPLAY_ROWS=14
 declare -ri BOX_WIDTH=76
 declare -ri ITEM_COL_WIDTH=48
 declare -ri DEBOUNCE_MS=150
+
+# Increased timeout for SSH/remote reliability
+declare -r ESC_READ_TIMEOUT=0.10
 
 # =============================================================================
 # ▲ END OF CONFIGURATION ▲
@@ -76,6 +81,9 @@ declare -i FINALIZED=0
 declare ORIG_CONFIG=""
 declare ORIG_STYLE=""
 
+# Global Temp file for secure trap cleanup
+declare _TMPFILE=""
+
 # Debounce State
 declare LAST_INPUT_TIME="0"
 declare -i PREVIEW_DIRTY=0
@@ -95,13 +103,19 @@ log_ok() {
     printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$1"
 }
 
+# Robust ANSI stripping using extglob parameter expansion.
+strip_ansi() {
+    local v="$1"
+    v="${v//$'\033'\[*([0-9;:?<=>])@([@A-Z\[\\\]^_\`a-z\{|\}~])/}"
+    REPLY="$v"
+}
+
 # Zero-fork millisecond timestamp using Bash 5.0+ EPOCHREALTIME.
 get_time_ms() {
     local -n _out_ms=$1
     local raw="${EPOCHREALTIME}"
     local seconds="${raw%%.*}"
     local fractional="${raw#*.}"
-    # EPOCHREALTIME gives 6 decimal places; take first 3 for milliseconds.
     fractional="${fractional:0:3}"
     _out_ms="${seconds}${fractional}"
 }
@@ -128,13 +142,19 @@ force_clean_locks() {
 
 cleanup() {
     local rc=$?
-    # Always restore terminal state first.
-    printf '%s%s%s' "$MOUSE_OFF" "$CURSOR_SHOW" "$C_RESET"
+    # Always restore terminal state first. Guard with || : to prevent pipe errors.
+    printf '%s%s%s' "$MOUSE_OFF" "$CURSOR_SHOW" "$C_RESET" 2>/dev/null || :
 
     if [[ -n "${ORIGINAL_STTY:-}" ]]; then
         stty "$ORIGINAL_STTY" 2>/dev/null || :
     fi
-    printf '\n'
+
+    # Secure temp file cleanup on unexpected exit
+    if [[ -n "${_TMPFILE:-}" && -f "$_TMPFILE" ]]; then
+        rm -f "$_TMPFILE" 2>/dev/null || :
+    fi
+
+    printf '\n' 2>/dev/null || :
 
     if (( FINALIZED )); then
         exit "$rc"
@@ -179,7 +199,8 @@ scan_themes() {
         THEME_NAMES+=("${dir##*/}")
     done
 
-    if (( ${#THEME_NAMES[@]} == 0 )); then
+    local -i count="${#THEME_NAMES[@]}"
+    if (( count == 0 )); then
         log_err "No valid theme directories found in ${CONFIG_ROOT}."
         exit 1
     fi
@@ -197,7 +218,8 @@ find_current_index() {
 
     local -i i
     local resolved
-    for (( i = 0; i < ${#THEME_DIRS[@]}; i++ )); do
+    local -i count="${#THEME_DIRS[@]}"
+    for (( i = 0; i < count; i++ )); do
         resolved=$(readlink -f "${THEME_DIRS[i]}") || continue
         if [[ "$resolved" == "$current_dir" ]]; then
             _out=$i
@@ -206,7 +228,6 @@ find_current_index() {
     done
 }
 
-# Reads the "position" field from a theme's config.jsonc via nameref.
 get_theme_position() {
     local -n _pos_out=$1
     local idx=$2
@@ -230,7 +251,8 @@ refresh_positions() {
     THEME_POSITIONS=()
     local -i i
     local pos
-    for (( i = 0; i < ${#THEME_NAMES[@]}; i++ )); do
+    local -i count="${#THEME_NAMES[@]}"
+    for (( i = 0; i < count; i++ )); do
         get_theme_position pos "$i"
         THEME_POSITIONS+=("$pos")
     done
@@ -252,16 +274,22 @@ toggle_position() {
         *)      target_pos="top" ;;
     esac
 
-    # Atomic write: sed to temp file, then mv to replace original.
-    local tmpfile
-    tmpfile=$(mktemp "${config_file}.XXXXXX")
+    # CRITICAL FIX: Atomic write preserving symlinks/inodes.
+    # Note: Using sed instead of template's awk because Waybar is JSONC, 
+    # and the template's hyprland block-parser would fail on JSON syntax.
+    _TMPFILE=$(mktemp "${config_file}.tmp.XXXXXXXXXX")
     
     if ! sed -E "s/(\"position\"[[:space:]]*:[[:space:]]*)\"[^\"]+\"/\1\"${target_pos}\"/" \
-         "$config_file" > "$tmpfile"; then
-        rm -f "$tmpfile"
+         "$config_file" > "$_TMPFILE"; then
+        rm -f "$_TMPFILE" 2>/dev/null || :
+        _TMPFILE=""
         return 1
     fi
-    mv -f "$tmpfile" "$config_file"
+
+    # Use `cat >` instead of `mv` to avoid breaking symlinks!
+    cat "$_TMPFILE" > "$config_file"
+    rm -f "$_TMPFILE"
+    _TMPFILE=""
 
     THEME_POSITIONS[idx]="$target_pos"
     queue_preview "$idx"
@@ -287,7 +315,8 @@ queue_preview() {
 
 commit_preview() {
     local -i idx=$PENDING_IDX
-    (( idx < 0 || idx >= ${#THEME_NAMES[@]} )) && return 0
+    local -i count="${#THEME_NAMES[@]}"
+    if (( idx < 0 || idx >= count )); then return 0; fi
 
     local dir="${THEME_DIRS[idx]}"
 
@@ -306,66 +335,115 @@ commit_preview() {
     PREVIEW_DIRTY=0
 }
 
-# --- UI Rendering ---
+# --- UI Rendering Engine ---
 
-draw_ui() {
-    local buf="" pad="" inner_line=""
-    local -i i count=${#THEME_NAMES[@]}
-    local -i vis_start vis_end
-    local -i vis_len left_pad right_pad
-    local item p_val p_str padded_name pos_tag status
-    local -i fill rows_rendered p_len
-    local position_info msg
+compute_scroll_window() {
+    local -i count=$1
+    if (( count == 0 )); then
+        SELECTED_ROW=0
+        SCROLL_OFFSET=0
+        _vis_start=0
+        _vis_end=0
+        return
+    fi
 
-    # Header
-    buf+="${CURSOR_HOME}"
-    buf+="${C_MAGENTA}┌${H_LINE}┐${C_RESET}"$'\n'
+    # Clamp SELECTED_ROW
+    if (( SELECTED_ROW < 0 )); then SELECTED_ROW=0; fi
+    if (( SELECTED_ROW >= count )); then SELECTED_ROW=$(( count - 1 )); fi
 
-    vis_len=$(( ${#APP_TITLE} + ${#APP_VERSION} + 1 ))
-    left_pad=$(( (BOX_WIDTH - vis_len) / 2 ))
-    right_pad=$(( BOX_WIDTH - vis_len - left_pad ))
-    printf -v pad '%*s' "$left_pad" ''
-    buf+="${C_MAGENTA}│${pad}${C_WHITE}${APP_TITLE} ${C_CYAN}${APP_VERSION}${C_MAGENTA}"
-    printf -v pad '%*s' "$right_pad" ''
-    buf+="${pad}│${C_RESET}"$'\n'
-    buf+="${C_MAGENTA}├${H_LINE}┤${C_RESET}"$'\n'
-
-    # Scroll Math
-    (( SELECTED_ROW < 0 )) && SELECTED_ROW=0
-    (( SELECTED_ROW >= count )) && SELECTED_ROW=$(( count - 1 ))
-
+    # Adjust SCROLL_OFFSET to keep selection visible
     if (( SELECTED_ROW < SCROLL_OFFSET )); then
         SCROLL_OFFSET=$SELECTED_ROW
     elif (( SELECTED_ROW >= SCROLL_OFFSET + MAX_DISPLAY_ROWS )); then
         SCROLL_OFFSET=$(( SELECTED_ROW - MAX_DISPLAY_ROWS + 1 ))
     fi
 
+    # Clamp SCROLL_OFFSET
     local -i max_scroll=$(( count - MAX_DISPLAY_ROWS ))
-    (( max_scroll < 0 )) && max_scroll=0
-    (( SCROLL_OFFSET > max_scroll )) && SCROLL_OFFSET=$max_scroll
+    if (( max_scroll < 0 )); then max_scroll=0; fi
+    if (( SCROLL_OFFSET > max_scroll )); then SCROLL_OFFSET=$max_scroll; fi
 
-    vis_start=$SCROLL_OFFSET
-    vis_end=$(( SCROLL_OFFSET + MAX_DISPLAY_ROWS ))
-    (( vis_end > count )) && vis_end=$count
+    _vis_start=$SCROLL_OFFSET
+    _vis_end=$(( SCROLL_OFFSET + MAX_DISPLAY_ROWS ))
+    if (( _vis_end > count )); then _vis_end=$count; fi
+}
 
-    # Scroll Indicator (top)
-    if (( SCROLL_OFFSET > 0 )); then
-        printf -v inner_line "    ▲ (more above)%*s" "$(( BOX_WIDTH - 18 ))" ""
-        buf+="${C_MAGENTA}│${C_GREY}${inner_line}${C_MAGENTA}│${C_RESET}"$'\n'
+# Renders the scroll indicators (above/below items) aligned with template
+render_scroll_indicator() {
+    local -n _rsi_buf=$1
+    local position="$2"
+    local -i count=$3 boundary=$4
+    local inner_line pad
+
+    if [[ "$position" == "above" ]]; then
+        if (( SCROLL_OFFSET > 0 )); then
+            printf -v inner_line "    ▲ (more above)%*s" "$(( BOX_WIDTH - 18 ))" ""
+            _rsi_buf+="${C_MAGENTA}│${C_GREY}${inner_line}${C_MAGENTA}│${C_RESET}${CLR_EOL}"$'\n'
+        else
+            printf -v inner_line '%*s' "$BOX_WIDTH" ''
+            _rsi_buf+="${C_MAGENTA}│${inner_line}│${C_RESET}${CLR_EOL}"$'\n'
+        fi
     else
-        printf -v inner_line '%*s' "$BOX_WIDTH" ''
-        buf+="${C_MAGENTA}│${inner_line}│${C_RESET}"$'\n'
+        # "below"
+        if (( count > MAX_DISPLAY_ROWS )); then
+            local position_info="[$(( SELECTED_ROW + 1 ))/${count}]"
+            local -i p_len=${#position_info}
+            if (( boundary < count )); then
+                local msg="    ▼ (more below) "
+                local -i fill=$(( BOX_WIDTH - ${#msg} - p_len ))
+                if (( fill < 0 )); then fill=0; fi
+                printf -v pad '%*s' "$fill" ''
+                _rsi_buf+="${C_MAGENTA}│${C_GREY}${msg}${pad}${position_info}${C_MAGENTA}│${C_RESET}${CLR_EOL}"$'\n'
+            else
+                local -i fill=$(( BOX_WIDTH - p_len - 1 ))
+                if (( fill < 0 )); then fill=0; fi
+                printf -v pad '%*s' "$fill" ''
+                _rsi_buf+="${C_MAGENTA}│${C_GREY}${pad}${position_info} ${C_MAGENTA}│${C_RESET}${CLR_EOL}"$'\n'
+            fi
+        else
+            printf -v inner_line '%*s' "$BOX_WIDTH" ''
+            _rsi_buf+="${C_MAGENTA}│${inner_line}│${C_RESET}${CLR_EOL}"$'\n'
+        fi
     fi
+}
 
-    # Render List
-    # Layout Fix:
-    # Selected Row Prefix: " ➤ " (3 chars)
-    # Normal Row Prefix:   "    " (4 chars)
-    # We define fixed widths for the content before the padding starts.
+draw_ui() {
+    local buf="" pad="" inner_line=""
+    local -i count="${#THEME_NAMES[@]}"
+    local -i i vis_len left_pad right_pad
+    local item p_val p_str padded_name pos_tag status
+    local -i fill rows_rendered
+    local -i _vis_start _vis_end
+
+    # Compute scroll window (populates _vis_start and _vis_end dynamically)
+    compute_scroll_window "$count"
+
+    # Header
+    buf+="${CURSOR_HOME}"
+    buf+="${C_MAGENTA}┌${H_LINE}┐${C_RESET}${CLR_EOL}"$'\n'
+
+    # Template Alignment: Use strip_ansi for robust header sizing
+    strip_ansi "$APP_TITLE"; local -i t_len=${#REPLY}
+    strip_ansi "$APP_VERSION"; local -i v_len=${#REPLY}
+    
+    vis_len=$(( t_len + v_len + 1 ))
+    left_pad=$(( (BOX_WIDTH - vis_len) / 2 ))
+    right_pad=$(( BOX_WIDTH - vis_len - left_pad ))
+    
+    printf -v pad '%*s' "$left_pad" ''
+    buf+="${C_MAGENTA}│${pad}${C_WHITE}${APP_TITLE} ${C_CYAN}${APP_VERSION}${C_MAGENTA}"
+    printf -v pad '%*s' "$right_pad" ''
+    buf+="${pad}│${C_RESET}${CLR_EOL}"$'\n'
+    buf+="${C_MAGENTA}├${H_LINE}┤${C_RESET}${CLR_EOL}"$'\n'
+
+    # Scroll Indicator (Top)
+    render_scroll_indicator buf "above" "$count" "$_vis_start"
+
+    # Render List Fixed Width Setup
     local -ri SEL_FIXED_WIDTH=$(( 3 + 5 + 1 + ITEM_COL_WIDTH + 1 + 8 ))
     local -ri NORM_FIXED_WIDTH=$(( 4 + 5 + 1 + ITEM_COL_WIDTH ))
 
-    for (( i = vis_start; i < vis_end; i++ )); do
+    for (( i = _vis_start; i < _vis_end; i++ )); do
         item="${THEME_NAMES[i]}"
         if (( ${#item} > ITEM_COL_WIDTH )); then
             item="${item:0:$((ITEM_COL_WIDTH - 1))}…"
@@ -396,55 +474,38 @@ draw_ui() {
             fi
 
             fill=$(( BOX_WIDTH - SEL_FIXED_WIDTH ))
-            (( fill < 0 )) && fill=0
+            if (( fill < 0 )); then fill=0; fi
             printf -v pad '%*s' "$fill" ''
 
-            buf+="${C_MAGENTA}│${C_CYAN} ➤ ${C_INVERSE}${pos_tag} ${padded_name}${C_RESET} ${status}${pad}${C_MAGENTA}│${C_RESET}"$'\n'
+            buf+="${C_MAGENTA}│${C_CYAN} ➤ ${C_INVERSE}${pos_tag} ${padded_name}${C_RESET} ${status}${pad}${C_MAGENTA}│${C_RESET}${CLR_EOL}"$'\n'
         else
             pos_tag="${C_GREY}${p_str}${C_RESET}"
 
             fill=$(( BOX_WIDTH - NORM_FIXED_WIDTH ))
-            (( fill < 0 )) && fill=0
+            if (( fill < 0 )); then fill=0; fi
             printf -v pad '%*s' "$fill" ''
 
-            buf+="${C_MAGENTA}│    ${pos_tag} ${padded_name}${pad}│${C_RESET}"$'\n'
+            buf+="${C_MAGENTA}│    ${pos_tag} ${padded_name}${pad}│${C_RESET}${CLR_EOL}"$'\n'
         fi
     done
 
     # Fill Empty Rows
-    rows_rendered=$(( vis_end - vis_start ))
+    rows_rendered=$(( _vis_end - _vis_start ))
     for (( i = rows_rendered; i < MAX_DISPLAY_ROWS; i++ )); do
         printf -v inner_line '%*s' "$BOX_WIDTH" ''
-        buf+="${C_MAGENTA}│${inner_line}│${C_RESET}"$'\n'
+        buf+="${C_MAGENTA}│${inner_line}│${C_RESET}${CLR_EOL}"$'\n'
     done
 
-    # Footer Indicators
-    if (( count > MAX_DISPLAY_ROWS )); then
-        position_info="[$(( SELECTED_ROW + 1 ))/${count}]"
-        p_len=${#position_info}
-        if (( vis_end < count )); then
-            msg="    ▼ (more below) "
-            fill=$(( BOX_WIDTH - ${#msg} - p_len ))
-            (( fill < 0 )) && fill=0
-            printf -v pad '%*s' "$fill" ''
-            buf+="${C_MAGENTA}│${C_GREY}${msg}${pad}${position_info}${C_MAGENTA}│${C_RESET}"$'\n'
-        else
-            fill=$(( BOX_WIDTH - p_len - 1 ))
-            (( fill < 0 )) && fill=0
-            printf -v pad '%*s' "$fill" ''
-            buf+="${C_MAGENTA}│${C_GREY}${pad}${position_info} ${C_MAGENTA}│${C_RESET}"$'\n'
-        fi
-    else
-        printf -v inner_line '%*s' "$BOX_WIDTH" ''
-        buf+="${C_MAGENTA}│${inner_line}│${C_RESET}"$'\n'
-    fi
+    # Scroll Indicator (Bottom)
+    render_scroll_indicator buf "below" "$count" "$_vis_end"
 
     # Footer Border
-    buf+="${C_MAGENTA}└${H_LINE}┘${C_RESET}"$'\n'
+    buf+="${C_MAGENTA}└${H_LINE}┘${C_RESET}${CLR_EOL}"$'\n'
 
     # Controls
-    buf+="${C_CYAN} [Space] Toggle Position   [↑/↓/PgUp/PgDn] Navigate   [Enter] Apply${C_RESET}"$'\n'
-    buf+="${C_CYAN} [Esc/q] Cancel & Revert   Config: ${C_WHITE}${CONFIG_ROOT}${C_RESET}${CLR_EOL}${CLR_EOS}"
+    buf+="${C_CYAN} [Space] Toggle Position   [↑/↓ j/k] Navigate   [PgUp/PgDn] Page${C_RESET}${CLR_EOL}"$'\n'
+    buf+="${C_CYAN} [Home/g] First   [End/G] Last   [Enter] Apply   [Esc/q] Cancel${C_RESET}${CLR_EOL}"$'\n'
+    buf+="${C_CYAN} Config: ${C_WHITE}${CONFIG_ROOT}${C_RESET}${CLR_EOL}${CLR_EOS}"
 
     printf '%s' "$buf"
 }
@@ -453,60 +514,168 @@ draw_ui() {
 
 navigate() {
     local -i dir=$1
-    local -i count=${#THEME_NAMES[@]}
-    (( count == 0 )) && return 0
+    local -i count="${#THEME_NAMES[@]}"
+    if (( count == 0 )); then return 0; fi
 
-    SELECTED_ROW=$(( SELECTED_ROW + dir ))
+    SELECTED_ROW=$(( (SELECTED_ROW + dir + count) % count ))
+    queue_preview "$SELECTED_ROW"
+    return 0
+}
 
-    # Wrap around
-    if (( SELECTED_ROW < 0 )); then
-        SELECTED_ROW=$(( count - 1 ))
-    elif (( SELECTED_ROW >= count )); then
+navigate_page() {
+    local -i dir=$1
+    local -i count="${#THEME_NAMES[@]}"
+    if (( count == 0 )); then return 0; fi
+
+    SELECTED_ROW=$(( SELECTED_ROW + dir * MAX_DISPLAY_ROWS ))
+
+    # Clamp (no wrap for page navigation)
+    if (( SELECTED_ROW < 0 )); then SELECTED_ROW=0; fi
+    if (( SELECTED_ROW >= count )); then SELECTED_ROW=$(( count - 1 )); fi
+
+    queue_preview "$SELECTED_ROW"
+    return 0
+}
+
+navigate_end() {
+    local -i target=$1
+    local -i count="${#THEME_NAMES[@]}"
+    if (( count == 0 )); then return 0; fi
+
+    if (( target == 0 )); then
         SELECTED_ROW=0
+    else
+        SELECTED_ROW=$(( count - 1 ))
     fi
 
     queue_preview "$SELECTED_ROW"
     return 0
 }
 
+# Robust escape sequence reader
+read_escape_seq() {
+    local -n _esc_out=$1
+    _esc_out=""
+    local char
+    if ! IFS= read -rsn1 -t "$ESC_READ_TIMEOUT" char; then
+        return 1
+    fi
+    _esc_out+="$char"
+    if [[ "$char" == '[' || "$char" == 'O' ]]; then
+        while IFS= read -rsn1 -t "$ESC_READ_TIMEOUT" char; do
+            _esc_out+="$char"
+            if [[ "$char" =~ [a-zA-Z~] ]]; then break; fi
+        done
+    fi
+    return 0
+}
+
 handle_mouse() {
-    local input=$1
-    # CRITICAL FIX: 'type' MUST NOT be declared as integer (-i), 
-    # otherwise assigning characters like "M" causes a crash.
-    local -i button y
+    local input="$1"
+    local -i button x y
     local type
 
-    # Input arrives as: [<button;x;y[Mm]
-    # Strip the leading '[' to simplify parsing.
-    local body="${input#\[}"
+    # Parse SGR mouse encoding: [<button;x;y[Mm]
+    local body="${input#'[<'}"
+    if [[ "$body" == "$input" ]]; then return 0; fi
 
-    local regex='^<([0-9]+);([0-9]+);([0-9]+)([Mm])$'
-    if [[ $body =~ $regex ]]; then
-        button=${BASH_REMATCH[1]}
-        # x=${BASH_REMATCH[2]}  # unused
-        y=${BASH_REMATCH[3]}
-        type="${BASH_REMATCH[4]}"
+    local terminator="${body: -1}"
+    if [[ "$terminator" != "M" && "$terminator" != "m" ]]; then return 0; fi
 
-        # Scroll wheel
-        if (( button == 64 )); then navigate -1; return 0; fi
-        if (( button == 65 )); then navigate  1; return 0; fi
+    body="${body%[Mm]}"
+    local field1 field2 field3
+    IFS=';' read -r field1 field2 field3 <<< "$body"
 
-        # Only process press events, not release
-        [[ "$type" != "M" ]] && return 0
+    # Validate numeric fields
+    if [[ ! "$field1" =~ ^[0-9]+$ ]]; then return 0; fi
+    if [[ ! "$field2" =~ ^[0-9]+$ ]]; then return 0; fi
+    if [[ ! "$field3" =~ ^[0-9]+$ ]]; then return 0; fi
 
-        # Item rows start at line 5 (Header=3 lines, Top Scroll Indicator=1 line, 1-indexed terminal)
-        local -i item_row_start=5
+    button=$field1
+    x=$field2
+    y=$field3
 
-        if (( y >= item_row_start && y < item_row_start + MAX_DISPLAY_ROWS )); then
-            local -i clicked_idx=$(( y - item_row_start + SCROLL_OFFSET ))
-            local -i count=${#THEME_NAMES[@]}
-            if (( clicked_idx >= 0 && clicked_idx < count )); then
-                SELECTED_ROW=$clicked_idx
-                queue_preview "$SELECTED_ROW"
-            fi
+    # Scroll wheel
+    if (( button == 64 )); then navigate -1; return 0; fi
+    if (( button == 65 )); then navigate  1; return 0; fi
+
+    # Only process press events, not release
+    [[ "$terminator" != "M" ]] && return 0
+
+    local -i item_row_start=5
+
+    if (( y >= item_row_start && y < item_row_start + MAX_DISPLAY_ROWS )); then
+        local -i clicked_idx=$(( y - item_row_start + SCROLL_OFFSET ))
+        local -i count="${#THEME_NAMES[@]}"
+        if (( clicked_idx >= 0 && clicked_idx < count )); then
+            SELECTED_ROW=$clicked_idx
+            queue_preview "$SELECTED_ROW"
         fi
     fi
     return 0
+}
+
+handle_key() {
+    local key="$1"
+
+    # Handle escape sequences
+    case "$key" in
+        '[A'|'OA')       navigate -1; return ;;
+        '[B'|'OB')       navigate  1; return ;;
+        '[5~')           navigate_page -1; return ;;
+        '[6~')           navigate_page  1; return ;;
+        '[H'|'[1~')      navigate_end 0; return ;;
+        '[F'|'[4~')      navigate_end 1; return ;;
+        '['*'<'*[Mm])    handle_mouse "$key"; return ;;
+    esac
+
+    # Handle regular keys
+    case "$key" in
+        k|K)            navigate -1 ;;
+        j|J)            navigate  1 ;;
+        g)              navigate_end 0 ;;
+        G)              navigate_end 1 ;;
+        ' ')
+            if (( ${#THEME_NAMES[@]} > 0 )); then
+                toggle_position "$SELECTED_ROW"
+            fi
+            ;;
+        ''|$'\n')       # Enter key
+            FINALIZED=1
+            return 1  # Signal to break main loop
+            ;;
+        # Reverse Action mappings (Backspace or Alt+Enter) act as toggle
+        $'\x7f'|$'\x08'|$'\e\n') 
+            if (( ${#THEME_NAMES[@]} > 0 )); then
+                toggle_position "$SELECTED_ROW"
+            fi
+            ;;
+        q|Q|$'\x03')    return 1 ;;  # q or Ctrl-C: quit
+        ESC)            return 1 ;;  # Bare ESC: quit
+        *)              ;;
+    esac
+    return 0
+}
+
+handle_input_router() {
+    local key="$1"
+    local escape_seq=""
+
+    # Template Alignment: Robust Alt+Enter & ESC sequence detection
+    if [[ "$key" == $'\x1b' ]]; then
+        if read_escape_seq escape_seq; then
+            key="$escape_seq"
+            # Logic for Alt+Enter detection (ESC followed by empty/newline)
+            if [[ "$key" == "" || "$key" == $'\n' ]]; then
+                key=$'\e\n'
+            fi
+        else
+            key="ESC"
+        fi
+    fi
+
+    handle_key "$key"
+    return $?
 }
 
 # --- Main ---
@@ -528,8 +697,14 @@ main() {
     done
 
     # Verify Bash 5.0+ for EPOCHREALTIME
-    if [[ -z "${EPOCHREALTIME:-}" ]]; then
+    if (( BASH_VERSINFO[0] < 5 )) || [[ -z "${EPOCHREALTIME:-}" ]]; then
         log_err "Bash 5.0+ required (EPOCHREALTIME not available)."
+        exit 1
+    fi
+
+    # TTY check
+    if [[ ! -t 0 && opt_toggle -eq 0 && opt_back -eq 0 ]]; then
+        log_err "TTY required for interactive mode."
         exit 1
     fi
 
@@ -546,7 +721,7 @@ main() {
     scan_themes
     refresh_positions
 
-    local -i total=${#THEME_NAMES[@]}
+    local -i total="${#THEME_NAMES[@]}"
     local -i cur_idx
     find_current_index cur_idx
 
@@ -554,7 +729,7 @@ main() {
     if (( opt_toggle || opt_back )); then
         local -i target_idx
         local cur_name="(unknown)"
-        (( cur_idx >= 0 )) && cur_name="${THEME_NAMES[cur_idx]}"
+        if (( cur_idx >= 0 )); then cur_name="${THEME_NAMES[cur_idx]}"; fi
 
         if (( cur_idx < 0 )); then
             target_idx=0
@@ -577,11 +752,10 @@ main() {
     fi
 
     # ── TUI MODE ──
-    # Save original state for revert on cancel.
     [[ -L "${CONFIG_ROOT}/config.jsonc" ]] && ORIG_CONFIG=$(readlink "${CONFIG_ROOT}/config.jsonc")
     [[ -L "${CONFIG_ROOT}/style.css" ]]    && ORIG_STYLE=$(readlink "${CONFIG_ROOT}/style.css")
 
-    (( cur_idx >= 0 )) && SELECTED_ROW=$cur_idx
+    if (( cur_idx >= 0 )); then SELECTED_ROW=$cur_idx; fi
 
     force_clean_locks
 
@@ -590,27 +764,24 @@ main() {
 
     printf '%s%s%s%s' "$MOUSE_ON" "$CURSOR_HIDE" "$CLR_SCREEN" "$CURSOR_HOME"
 
-    # Initial preview
     queue_preview "$SELECTED_ROW"
     commit_preview
 
-    local key seq char
+    local key
     local current_time_ms
 
     while true; do
         draw_ui
 
-        # Debounce Logic
+        # Retained Waybar-specific debounce loop for live previews
         if (( PREVIEW_DIRTY )); then
             get_time_ms current_time_ms
             if (( current_time_ms - LAST_INPUT_TIME > DEBOUNCE_MS )); then
                 commit_preview
                 continue
             fi
-            # Non-blocking short read during active debounce wait
             IFS= read -rsn1 -t 0.05 key || true
         else
-            # Blocking read when idle
             IFS= read -rsn1 key || true
         fi
 
@@ -618,49 +789,15 @@ main() {
             continue
         fi
 
-        if [[ "$key" == $'\x1b' ]]; then
-            seq=""
-            # Hardcoded small timeout for sequence safety
-            while IFS= read -rsn1 -t 0.02 char; do
-                seq+="$char"
-            done
-
-            # Bare ESC (no sequence following) -> quit
-            if [[ -z "$seq" ]]; then
-                break
-            fi
-
-            case "$seq" in
-                '[A'|'OA')    navigate -1  ;;
-                '[B'|'OB')    navigate  1  ;;
-                '[5~')        navigate -10 ;;  # Page Up
-                '[6~')        navigate  10 ;;  # Page Down
-                '['*'<'*)     handle_mouse "$seq" ;;
-                *)            ;;  # Unknown sequence, ignore
-            esac
-        else
-            case "$key" in
-                k|K)          navigate -1 ;;
-                j|J)          navigate  1 ;;
-                ' ')
-                    if (( ${#THEME_NAMES[@]} > 0 )); then
-                        toggle_position "$SELECTED_ROW"
-                    fi
-                    ;;
-                '')           # Enter key
-                    FINALIZED=1
-                    break
-                    ;;
-                q|Q|$'\x03')  break ;;  # q or Ctrl-C
-                *)            ;;
-            esac
+        # Route input through hardened handler
+        if ! handle_input_router "$key"; then
+            break
         fi
     done
 
     if (( FINALIZED )); then
         log_ok "Applied: ${THEME_NAMES[SELECTED_ROW]}"
     fi
-    # Exit handled by trap cleanup
 }
 
 main "$@"
