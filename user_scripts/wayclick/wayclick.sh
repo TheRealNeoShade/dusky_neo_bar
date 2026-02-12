@@ -19,6 +19,12 @@ readonly RUNNER_SCRIPT="$BASE_DIR/runner.py"
 readonly CONFIG_DIR="$HOME/.config/wayclick"
 readonly STATE_FILE="$HOME/.config/dusky/settings/wayclick"
 
+# --- DEVICE DETECTION SETTINGS ---
+# Add keywords here. If a device name contains ANY of these strings,
+# it will be treated as a trackpad (Case Insensitive).
+# "glidepoint" fixes older Alps devices; "magic trackpad" handles Apple devices.
+readonly TRACKPAD_IDENTIFIERS=("touchpad" "trackpad" "glidepoint" "magic trackpad" "clickpad")
+
 # --- ANSI COLORS ---
 readonly C_RED=$'\033[1;31m'
 readonly C_GREEN=$'\033[1;32m'
@@ -55,24 +61,20 @@ if (( EUID == 0 )); then
 fi
 
 # 1. Toggle Logic (NUCLEAR OPTION - Fixes Ghost Processes)
-# We search loosely for 'runner.py' to ensure we kill ANY version (Old or New).
-# This prevents "Double Audio" where two scripts fight for the keyboard.
-if pgrep -f "runner.py" >/dev/null 2>&1; then
+# CRITICAL FIX: Use full path to avoid killing unrelated 'runner.py' instances (e.g., text editors)
+if pgrep -f "$RUNNER_SCRIPT" >/dev/null 2>&1; then
     printf "%b[TOGGLE]%b Stopping active instance...\n" "${C_YELLOW}" "${C_RESET}"
     
     command -v notify-send >/dev/null 2>&1 && notify-send --app-name="WayClick" "WayClick Elite" "Disabled"
     
-    # Kill EVERYTHING matching runner.py
-    pkill -TERM -f "runner.py" 2>/dev/null || true
+    pkill -TERM -f "$RUNNER_SCRIPT" 2>/dev/null || true
     
-    # Wait loop with timeout (max 5 seconds)
-    local wait_count=0
-    while pgrep -f "runner.py" >/dev/null 2>&1 && (( wait_count++ < 50 )); do
+    wait_count=0
+    while pgrep -f "$RUNNER_SCRIPT" >/dev/null 2>&1 && (( wait_count++ < 50 )); do
         sleep 0.1
     done
     
-    # Hard kill if it became a zombie
-    pkill -KILL -f "runner.py" 2>/dev/null || true
+    pkill -KILL -f "$RUNNER_SCRIPT" 2>/dev/null || true
     exit 0
 fi
 
@@ -83,10 +85,19 @@ notify_user() {
     command -v notify-send >/dev/null 2>&1 && notify-send --app-name="WayClick" "WayClick Elite" "$1"
 }
 
-# 3. Dependency Check (Safe Array usage)
+# 3. Dependency Check
 declare -a NEEDED_DEPS=()
 command -v uv >/dev/null 2>&1 || NEEDED_DEPS+=("uv")
 command -v notify-send >/dev/null 2>&1 || NEEDED_DEPS+=("libnotify")
+
+# CRITICAL FIX: Source build (--no-binary) REQUIRES system libraries and compiler.
+# If these are missing, the pip install step WILL fail.
+if [[ ! -f "$BASE_DIR/.build_marker_v5" ]]; then
+    command -v gcc >/dev/null 2>&1 || NEEDED_DEPS+=("gcc")
+    if ! pacman -Qq sdl2 >/dev/null 2>&1; then
+        NEEDED_DEPS+=("sdl2" "sdl2_mixer" "sdl2_image" "sdl2_ttf")
+    fi
+fi
 
 if (( ${#NEEDED_DEPS[@]} > 0 )); then
     if $INTERACTIVE; then
@@ -113,7 +124,7 @@ if (( ${#NEEDED_DEPS[@]} > 0 )); then
     fi
 fi
 
-# 4. Group Permission Check (Reliable Word Boundaries)
+# 4. Group Permission Check
 if ! id -nG "$USER" | grep -qw input; then
     if $INTERACTIVE; then
         printf "%b[PERM]%b User '%s' is not in the 'input' group.\n" "${C_RED}" "${C_RESET}" "$USER"
@@ -166,7 +177,6 @@ if [[ ! -d "$VENV_DIR" ]]; then
     uv venv "$VENV_DIR" --python 3.14 --quiet
 fi
 
-# Build marker v5 to ensure fresh compilation with LTO flags
 MARKER_FILE="$BASE_DIR/.build_marker_v5"
 
 if [[ ! -f "$MARKER_FILE" ]]; then
@@ -176,16 +186,13 @@ if [[ ! -f "$MARKER_FILE" ]]; then
     fi
 
     printf "%b[BUILD]%b Compiling dependencies with NATIVE CPU FLAGS (AVX2+ / LTO)...\n" "${C_YELLOW}" "${C_RESET}"
-    printf "       %bThis runs ON THE METAL. No generic binaries allowed.%b\n" "${C_DIM}" "${C_RESET}"
     
-    # ---------------------------------------------------------
-    # ELITE BUILD FLAGS (LTO Included)
-    # -flto=auto: Link-Time Optimization for C extensions (5-15% speedup)
-    # ---------------------------------------------------------
     export CFLAGS="-march=native -mtune=native -O3 -pipe -fno-plt -flto=auto -ffat-lto-objects"
     export CXXFLAGS="$CFLAGS"
     export LDFLAGS="-Wl,-O1,--sort-common,--as-needed,-z,now,--relax -flto=auto"
     
+    # NOTE: Native compilation of pygame-ce requires system SDL headers (sdl2, sdl2_mixer, etc.)
+    # These were checked in the dependency section above.
     uv pip install --python "$PYTHON_BIN" \
         --no-binary :all: \
         --compile-bytecode \
@@ -206,7 +213,6 @@ import json
 
 # === STARTUP OPTIMIZATION ===
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
-# 512 Buffer = ~10ms latency (Imperceptible) but ZERO crackle risk.
 os.environ['SDL_BUFFER_CHUNK_SIZE'] = '512'
 os.environ['SDL_AUDIODRIVER'] = 'pipewire,pulseaudio,alsa'
 
@@ -218,8 +224,13 @@ C_GREEN, C_YELLOW, C_BLUE, C_RED, C_RESET = "\033[1;32m", "\033[1;33m", "\033[1;
 ASSET_DIR = sys.argv[1]
 ENABLE_TRACKPADS = os.environ.get('ENABLE_TRACKPADS', 'false').lower() == 'true'
 
+# === DYNAMIC IDENTIFIERS ===
+# Load user-defined trackpad keywords from env to avoid hardcoding issues
+# CHANGED: Uses WC_TRACKPAD_IDS to avoid collision with Bash readonly array
+raw_identifiers = os.environ.get('WC_TRACKPAD_IDS', 'touchpad,trackpad')
+TRACKPAD_KEYWORDS = [x.strip().lower() for x in raw_identifiers.split(',') if x.strip()]
+
 # === AUDIO INIT ===
-# 48000Hz = Native Pipewire Rate (No Resampling = Cleaner Audio)
 try:
     pygame.mixer.pre_init(frequency=48000, size=-16, channels=2, buffer=512)
     pygame.mixer.init()
@@ -257,7 +268,6 @@ if not SOUNDS:
     sys.exit("ERROR: No sounds loaded! Check your config.json and .wav files.")
 
 # === PERFORMANCE: LIST CACHE LOOKUP ===
-# The 65536 List index is strictly faster than a dict.get() in CPython.
 MAX_KEYCODE = 65536
 SOUND_CACHE = [None] * MAX_KEYCODE
 DEFAULT_SOUND_OBJS = tuple(SOUNDS[f] for f in DEFAULTS if f in SOUNDS)
@@ -266,7 +276,7 @@ for code, filename in RAW_KEY_MAP.items():
     if code < MAX_KEYCODE and filename in SOUNDS:
         SOUND_CACHE[code] = SOUNDS[filename]
 
-# === HOT PATH PRE-BINDING (LOAD_FAST vs LOAD_GLOBAL) ===
+# === HOT PATH PRE-BINDING ===
 _random_choice = random.choice
 _sound_cache = SOUND_CACHE
 _max_keycode = MAX_KEYCODE
@@ -274,7 +284,6 @@ _defaults = DEFAULT_SOUND_OBJS
 _has_defaults = bool(DEFAULT_SOUND_OBJS)
 
 def play_sound(code):
-    """Ultra-minimal hot path relying exclusively on local variables."""
     if code < _max_keycode:
         sound = _sound_cache[code]
         if sound is not None:
@@ -284,7 +293,6 @@ def play_sound(code):
         _random_choice(_defaults).play()
 
 async def read_device(dev, stop_event):
-    """Async reader. Accepts pre-opened device to avoid descriptor thrashing."""
     _play = play_sound
     _is_stopped = stop_event.is_set
     
@@ -327,15 +335,16 @@ async def main():
                     dev = evdev.InputDevice(path)
                     
                     if not ENABLE_TRACKPADS:
+                        # GENERIC CHECK: Compare device name against user list
                         name_lower = dev.name.lower()
-                        if 'touchpad' in name_lower or 'trackpad' in name_lower:
+                        is_trackpad = any(k in name_lower for k in TRACKPAD_KEYWORDS)
+                        
+                        if is_trackpad:
                             dev.close()
                             continue
 
                     caps = dev.capabilities()
                     if 1 in caps:  # EV_KEY
-                        # ARCHITECTURAL FIX: Pass the opened 'dev' directly to the task.
-                        # Do not close it here just to re-open it inside read_device().
                         task = asyncio.create_task(read_device(dev, stop))
                         monitored_tasks[path] = task
                     else:
@@ -346,18 +355,15 @@ async def main():
         except Exception as e:
             print(f"Discovery Loop Error: {e}")
 
-        # Cleanup completed tasks
         dead_paths = [p for p, t in monitored_tasks.items() if t.done()]
         for p in dead_paths:
             del monitored_tasks[p]
 
-        # Hotplug poll (3s)
         try:
             await asyncio.wait_for(stop.wait(), timeout=3.0)
         except asyncio.TimeoutError:
             continue
     
-    # Graceful shutdown
     print("\nStopping...")
     for t in monitored_tasks.values():
         t.cancel()
@@ -379,8 +385,14 @@ $INTERACTIVE || notify_user "Enabled"
 
 update_state "True"
 
-# Execute using UV Python. 
-# -OOB: Strip asserts (-O), strip docstrings (-OO), don't write pyc (-B)
-ENABLE_TRACKPADS="$CONFIG_ENABLE_TRACKPADS" "$PYTHON_BIN" -OOB "$RUNNER_SCRIPT" "$CONFIG_DIR"
+# Convert array to comma-separated string for Python
+# This handles spaces in names (e.g. "magic trackpad") correctly via env vars
+TP_IDS_STR=$(IFS=, ; echo "${TRACKPAD_IDENTIFIERS[*]}")
+
+# FIXED: Renamed env var to WC_TRACKPAD_IDS to avoid collision with readonly bash array
+# FIXED: Split python flags -OOB into -OO -B for POSIX compliance/stability
+ENABLE_TRACKPADS="$CONFIG_ENABLE_TRACKPADS" \
+WC_TRACKPAD_IDS="$TP_IDS_STR" \
+"$PYTHON_BIN" -OO -B "$RUNNER_SCRIPT" "$CONFIG_DIR"
 
 printf "\n%b[INFO]%b WayClick stopped.\n" "${C_BLUE}" "${C_RESET}"
