@@ -73,6 +73,11 @@ TRUE_VALUES: Final[frozenset[str]] = frozenset(
     {"enabled", "yes", "true", "1", "on", "active", "set", "running", "open", "high"}
 )
 
+# Shell metacharacters that mandate /bin/sh -c interpretation.
+# Quotes (' ") are intentionally excluded: shlex.split() handles them.
+# FIX APPLIED: Added '=' to ensure environment variable assignments trigger shell execution.
+_SHELL_METACHAR: Final[frozenset[str]] = frozenset('|&;<>()$`\\*?#~![]{}=\n')
+
 
 # =============================================================================
 # LAZY THREAD POOL (Singleton for File I/O & Legacy Tasks)
@@ -393,11 +398,37 @@ def _submit_task_safe(func: Callable[[], None], state: WidgetState) -> bool:
 # =============================================================================
 # ASYNC SUBPROCESS INFRASTRUCTURE
 # =============================================================================
+def _parse_simple_argv(command: str) -> list[str] | None:
+    """
+    Attempt to decompose *command* into a direct-exec argv list.
+    Returns the argv list when the command is a straightforward executable
+    invocation (e.g. ``brightnessctl get``).
+    Returns ``None`` when shell features are detected (pipes, redirections, 
+    variable expansion, globs, etc.), signalling that /bin/sh -c is required.
+    """
+    # Fast O(n) set-intersection check — cheaper than a regex for short
+    # polling commands and avoids compiling a pattern at import time.
+    if _SHELL_METACHAR.intersection(command):
+        return None
+    try:
+        argv = shlex.split(command)
+        return argv if argv else None
+    except ValueError:
+        # Malformed quoting — let the shell figure it out.
+        return None
+
+
 def _run_shell_async(
     command: str,
     timeout_seconds: int,
     on_complete: Callable[[str | None], None],
 ) -> Gio.Cancellable | None:
+    """
+    Asynchronously run *command*, invoking *on_complete* on the main thread.
+    **Optimization**: simple commands (no pipes, redirections, variable
+    expansion) are exec'd directly, avoiding the fork+exec overhead of
+    ``/bin/sh -c`` on every polling tick.
+    """
     cancellable = Gio.Cancellable()
     timeout_source_id: int = 0
     
@@ -425,11 +456,16 @@ def _run_shell_async(
         except GLib.Error:
             on_complete(None)
 
+    # Direct exec when possible; shell wrapper only when necessary.
+    argv = _parse_simple_argv(command)
+    if argv is None:
+        argv = ["/bin/sh", "-c", command]
+
     try:
         launcher = Gio.SubprocessLauncher.new(
             Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE
         )
-        proc = launcher.spawnv(["/bin/sh", "-c", command])
+        proc = launcher.spawnv(argv)
     except GLib.Error as e:
         log.debug("Failed to spawn command '%.30s...': %s", command, e.message)
         GLib.idle_add(lambda: (on_complete(None), GLib.SOURCE_REMOVE)[1])
@@ -1011,8 +1047,8 @@ class SliderRow(SliderMonitorMixin, BaseActionRow):
         self.step_val = step if step > MIN_STEP_VALUE else 1.0
         self.debounce_enabled = bool(properties.get("debounce", True))
 
-        self._slider_lock = threading.RLock()
-        self._slider_changing = False
+        # ---- feedback-loop guard (no lock needed — main thread only) ----
+        self._slider_changing: bool = False
         self._last_snapped: float | None = None
         self._pending_value: float | None = None
 
@@ -1033,66 +1069,90 @@ class SliderRow(SliderMonitorMixin, BaseActionRow):
         self._start_value_monitor()
 
     def _apply_value_update(self, new_value: float) -> bool:
+        """Push a polled value into the slider, suppressing feedback."""
         with self._state.lock:
-            if self._state.is_destroyed: return GLib.SOURCE_REMOVE
+            if self._state.is_destroyed:
+                return GLib.SOURCE_REMOVE
 
-        with self._slider_lock:
-            current = self.slider.get_value()
-            if abs(current - new_value) < self.step_val: return GLib.SOURCE_REMOVE
-            self._slider_changing = True
-            try:
-                safe_val = max(self.min_val, min(new_value, self.max_val))
-                self.slider.set_value(safe_val)
-                self._last_snapped = safe_val
-            finally:
-                self._slider_changing = False
+        current = self.slider.get_value()
+        if abs(current - new_value) < self.step_val:
+            return GLib.SOURCE_REMOVE
+
+        # Guard against the synchronous value-changed re-entry.
+        self._slider_changing = True
+        try:
+            safe_val = max(self.min_val, min(new_value, self.max_val))
+            self.slider.set_value(safe_val)
+            self._last_snapped = safe_val
+        finally:
+            self._slider_changing = False
+
         return GLib.SOURCE_REMOVE
 
     def _on_value_changed(self, scale: Gtk.Scale) -> None:
-        with self._slider_lock:
-            if self._slider_changing: return
-            val = scale.get_value()
-            snapped = round(val / self.step_val) * self.step_val
-            snapped = max(self.min_val, min(snapped, self.max_val))
+        # Re-entrant call from set_value() inside this class — ignore.
+        if self._slider_changing:
+            return
 
-            if self._last_snapped is not None and abs(snapped - self._last_snapped) < MIN_STEP_VALUE:
-                return
-            self._last_snapped = snapped
+        val = scale.get_value()
+        snapped = round(val / self.step_val) * self.step_val
+        snapped = max(self.min_val, min(snapped, self.max_val))
 
-            if abs(snapped - val) > MIN_STEP_VALUE:
-                self._slider_changing = True
-                try: self.slider.set_value(snapped)
-                finally: self._slider_changing = False
+        if (
+            self._last_snapped is not None
+            and abs(snapped - self._last_snapped) < MIN_STEP_VALUE
+        ):
+            return
+        self._last_snapped = snapped
 
-            self._pending_value = snapped
+        # Snap the visual handle if it drifted from the grid.
+        if abs(snapped - val) > MIN_STEP_VALUE:
+            self._slider_changing = True
+            try:
+                self.slider.set_value(snapped)
+            finally:
+                self._slider_changing = False
+
+        self._pending_value = snapped
 
         if not self.debounce_enabled:
             self._execute_debounced_action()
             return
 
         with self._state.lock:
-            if self._state.is_destroyed: return
+            if self._state.is_destroyed:
+                return
             old_id = self._state.debounce_source_id
-            self._state.debounce_source_id = GLib.timeout_add(SLIDER_DEBOUNCE_MS, self._execute_debounced_action)
+            self._state.debounce_source_id = GLib.timeout_add(
+                SLIDER_DEBOUNCE_MS, self._execute_debounced_action
+            )
         _safe_source_remove(old_id)
 
     def _execute_debounced_action(self) -> bool:
         with self._state.lock:
-            if self._state.is_destroyed: return GLib.SOURCE_REMOVE
+            if self._state.is_destroyed:
+                return GLib.SOURCE_REMOVE
             self._state.debounce_source_id = 0
 
-        with self._slider_lock:
-            value = self._pending_value
-            self._pending_value = None
+        value = self._pending_value
+        self._pending_value = None
 
-        if value is None: return GLib.SOURCE_REMOVE
+        if value is None:
+            return GLib.SOURCE_REMOVE
 
         if isinstance(self.on_action, dict) and self.on_action.get("type") == "exec":
             if cmd := self.on_action.get("command"):
                 final_cmd = str(cmd).replace("{value}", str(int(value)))
                 is_term = bool(self.on_action.get("terminal", False))
-                if is_term: utility.execute_command(final_cmd, "Slider", True)
-                else: subprocess.Popen(final_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if is_term:
+                    utility.execute_command(final_cmd, "Slider", True)
+                else:
+                    subprocess.Popen(
+                        final_cmd,
+                        shell=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
         return GLib.SOURCE_REMOVE
 
 
