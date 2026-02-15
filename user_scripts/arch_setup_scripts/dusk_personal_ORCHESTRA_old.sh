@@ -1,29 +1,14 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  ARCH LINUX MASTER ORCHESTRATOR
+#  ARCH LINUX MASTER ORCHESTRATOR - FINAL (RESTORED)
 # ==============================================================================
 #  INSTRUCTIONS:
-#  1. Configure SCRIPT_SEARCH_DIRS below with directories containing your scripts.
-#  2. Edit the 'INSTALL_SEQUENCE' list below.
-#  3. Use "S | name.sh" for Root (Sudo) commands.
-#  4. Use "U | name.sh" for User commands.
-#  5. Entries WITHOUT a / in the name are searched across SCRIPT_SEARCH_DIRS
-#     in order (first match wins).
-#  6. Entries WITH a / are treated as direct absolute paths (no searching).
-#     Use ${HOME} instead of ~ for home directory paths.
+#  1. Edit the 'INSTALL_SEQUENCE' list below.
+#  2. Use "S | name.sh" for Root (Sudo) commands.
+#  3. Use "U | name.sh" for User commands.
 # ==============================================================================
 
 # --- USER CONFIGURATION AREA ---
-
-# Directories to search for scripts (in order — first match wins)
-SCRIPT_SEARCH_DIRS=(
-    "${HOME}/user_scripts/arch_setup_scripts/scripts"
-    # "${HOME}/my_other_scripts"
-    # "/opt/shared_team_scripts"
-)
-
-# Delay (in seconds) after each successful script. Set to 0 to disable.
-POST_SCRIPT_DELAY=1
 
 INSTALL_SEQUENCE=(
     "U | 000_configure_keyboard.sh"
@@ -126,18 +111,19 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-# 2. Paths & Constants
+# 2. Hardcoded Paths
+# We use curly braces ${HOME} to safely expand the variable.
+readonly SCRIPT_DIR="${HOME}/user_scripts/arch_setup_scripts/scripts"
 readonly STATE_FILE="${HOME}/Documents/.install_state"
 readonly LOG_FILE="${HOME}/Documents/logs/install_$(date +%Y%m%d_%H%M%S).log"
-readonly LOCK_FILE="/tmp/orchestra_${UID}.lock"
-readonly SUDO_REFRESH_INTERVAL=50
 
-# 3. Global Variables
+# Constants
+readonly SUDO_REFRESH_INTERVAL=50  # Seconds between sudo refreshes
+
+# Global Variables
 declare -g SUDO_PID=""
-declare -g LOGGING_INITIALIZED=0
-declare -g EXECUTION_PHASE=0
 
-# 4. Colors
+# 3. Colors
 declare -g RED="" GREEN="" BLUE="" YELLOW="" BOLD="" RESET=""
 
 if [[ -t 1 ]] && command -v tput &>/dev/null; then
@@ -151,8 +137,16 @@ if [[ -t 1 ]] && command -v tput &>/dev/null; then
     fi
 fi
 
-# 5. Logging
+# 4. Advanced Logging
 setup_logging() {
+    # Check if the hardcoded path actually exists
+    if [[ ! -d "$SCRIPT_DIR" ]]; then
+        echo "CRITICAL ERROR: The hardcoded path does not exist:"
+        echo " -> $SCRIPT_DIR"
+        exit 1
+    fi
+
+    # FIX: Ensure log directory exists to prevent crash on fresh install
     local log_dir
     log_dir="$(dirname "$LOG_FILE")"
     if [[ ! -d "$log_dir" ]]; then
@@ -160,9 +154,13 @@ setup_logging() {
     fi
 
     touch "$LOG_FILE"
+    exec 3>&1 4>&2
+    
+    # We redirect output to tee. 
+    # tee prints to STDOUT (screen) keeping colors.
+    # tee pipes to sed (file) stripping colors (ANSI sequences) so the log is clean.
     exec > >(tee >(sed 's/\x1B\[[0-9;]*[a-zA-Z]//g; s/\x1B(B//g' >> "$LOG_FILE")) 2>&1
-
-    LOGGING_INITIALIZED=1
+    
     echo "--- Installation Started: $(date '+%Y-%m-%d %H:%M:%S') ---"
     echo "--- Log File: $LOG_FILE ---"
 }
@@ -171,7 +169,7 @@ log() {
     local level="$1"
     local msg="$2"
     local color=""
-
+    
     case "$level" in
         INFO)    color="$BLUE" ;;
         SUCCESS) color="$GREEN" ;;
@@ -183,7 +181,7 @@ log() {
     printf "%s[%s]%s %s\n" "${color}" "${level}" "${RESET}" "${msg}"
 }
 
-# 6. Sudo Management
+# 5. Sudo Management
 init_sudo() {
     log "INFO" "Sudo privileges required. Please authenticate."
     if ! sudo -v; then
@@ -191,7 +189,8 @@ init_sudo() {
         exit 1
     fi
 
-    ( set +e; while true; do sudo -n true; sleep "$SUDO_REFRESH_INTERVAL"; kill -0 "$$" || exit; done 2>/dev/null ) &
+    # FIX: Use named constant instead of magic number
+    ( while true; do sudo -n true; sleep "$SUDO_REFRESH_INTERVAL"; kill -0 "$$" || exit; done 2>/dev/null ) &
     SUDO_PID=$!
     disown "$SUDO_PID"
 }
@@ -201,23 +200,16 @@ cleanup() {
     if [[ -n "${SUDO_PID:-}" ]]; then
         kill "$SUDO_PID" 2>/dev/null || true
     fi
-
-    if [[ $EXECUTION_PHASE -eq 1 ]]; then
-        if [[ $exit_code -eq 0 ]]; then
-            log "SUCCESS" "Orchestrator finished successfully."
-        else
-            log "ERROR" "Orchestrator exited with error code $exit_code."
-        fi
-    fi
-
-    # Allow process substitution (tee/sed) to flush final output to log file
-    if [[ $LOGGING_INITIALIZED -eq 1 ]]; then
-        sleep 0.3
+    
+    if [[ $exit_code -eq 0 ]]; then
+        log "SUCCESS" "Orchestrator finished successfully."
+    else
+        log "ERROR" "Orchestrator exited with error code $exit_code."
     fi
 }
 trap cleanup EXIT
 
-# 7. Utility Functions
+# 6. Utility Functions
 trim() {
     local var="$*"
     var="${var#"${var%%[![:space:]]*}"}"
@@ -225,88 +217,39 @@ trim() {
     printf '%s' "$var"
 }
 
-resolve_script() {
-    local name="$1"
-    # Contains a slash → direct path, no searching
-    if [[ "$name" == */* ]]; then
-        if [[ -f "$name" ]]; then
-            printf '%s' "$name"
-            return 0
-        fi
-        return 1
-    fi
-    # No slash → search directories in order, first match wins
-    for dir in "${SCRIPT_SEARCH_DIRS[@]}"; do
-        if [[ -f "${dir}/${name}" ]]; then
-            printf '%s' "${dir}/${name}"
-            return 0
-        fi
-    done
-    return 1
-}
-
-report_search_locations() {
-    local name="$1"
-    if [[ "$name" == */* ]]; then
-        log "ERROR" "Direct path not found: $name"
-    else
-        log "ERROR" "Script '$name' not found in any search directory:"
-        for dir in "${SCRIPT_SEARCH_DIRS[@]}"; do
-            log "ERROR" "  - ${dir}/"
-        done
-    fi
-}
-
-validate_search_dirs() {
-    if [[ ${#SCRIPT_SEARCH_DIRS[@]} -eq 0 ]]; then
-        log "ERROR" "SCRIPT_SEARCH_DIRS is empty. Add at least one directory."
-        exit 1
-    fi
-
-    local valid=0
-    for dir in "${SCRIPT_SEARCH_DIRS[@]}"; do
-        if [[ -d "$dir" ]]; then
-            log "INFO" "Search directory OK: $dir"
-            ((++valid))
-        else
-            log "WARN" "Search directory not found: $dir"
-        fi
-    done
-
-    if ((valid == 0)); then
-        log "ERROR" "None of the configured search directories exist."
-        exit 1
-    fi
-}
-
+# [NEW] Helper to get script description from file header
 get_script_description() {
-    local filepath="$1"
+    local filename="$1"
     local desc
-    desc=$(sed -n '2s/^#[[:space:]]*//p' "$filepath" 2>/dev/null)
+    # Try to get first comment line after shebang (line 2)
+    # Using SCRIPT_DIR explicitly to be safe regardless of current working directory
+    desc=$(sed -n '2s/^#[[:space:]]*//p' "${SCRIPT_DIR}/${filename}" 2>/dev/null)
     if [[ -z "$desc" ]]; then
-        desc=$(sed -n '3s/^#[[:space:]]*//p' "$filepath" 2>/dev/null)
+        # Try line 3 if line 2 was empty or not a comment
+        desc=$(sed -n '3s/^#[[:space:]]*//p' "${SCRIPT_DIR}/${filename}" 2>/dev/null)
     fi
     printf "%s" "${desc:-No description available}"
 }
 
+# [NEW] Pre-flight check to validate all scripts exist before starting
 preflight_check() {
     local missing=0
     log "INFO" "Performing pre-flight validation..."
-
+    
     for entry in "${INSTALL_SEQUENCE[@]}"; do
         local rest="${entry#*|}"
         rest=$(trim "$rest")
         local filename args
         read -r filename args <<< "$rest"
-
-        if ! resolve_script "$filename" > /dev/null; then
-            log "ERROR" "Missing: ${filename}"
+        
+        if [[ ! -f "${SCRIPT_DIR}/${filename}" ]]; then
+            log "ERROR" "Missing file: ${filename}"
             ((++missing))
         fi
     done
-
+    
     if ((missing > 0)); then
-        echo -e "${RED}CRITICAL:${RESET} $missing script(s) could not be found."
+        echo -e "${RED}CRITICAL:${RESET} $missing script(s) are missing from $SCRIPT_DIR."
         read -r -p "Continue anyway? [y/N]: " _choice
         if [[ "${_choice,,}" != "y" ]]; then
             log "ERROR" "Aborting execution."
@@ -333,10 +276,6 @@ Description:
     for Arch Linux with Hyprland. It tracks completed scripts and
     can resume from where it left off if interrupted.
 
-    Scripts are searched in the directories listed in SCRIPT_SEARCH_DIRS
-    (first match wins). Entries with a / in the name are treated as
-    direct absolute paths.
-
 Examples:
     $(basename "$0")              # Normal run
     $(basename "$0") --dry-run    # Preview what would be executed
@@ -346,7 +285,8 @@ EOF
 }
 
 main() {
-    # Root User Guard
+    # FIX: Root User Guard
+    # If run as root, user scripts will create files owned by root in the user's home, causing breakage.
     if [[ $EUID -eq 0 ]]; then
         echo -e "${RED}CRITICAL ERROR: This script must NOT be run as root!${RESET}"
         echo "The script handles sudo privileges internally for specific steps."
@@ -354,60 +294,55 @@ main() {
         exit 1
     fi
 
-    # --- ARGUMENT HANDLING ---
+    # --- ARGUMENT HANDLING (EARLY - before any prompts or logging) ---
     case "${1:-}" in
         --help|-h)
             show_help
             ;;
         --dry-run|-d)
             echo -e "\n${YELLOW}=== DRY RUN MODE ===${RESET}"
+            echo -e "Script directory: ${BOLD}${SCRIPT_DIR}${RESET}"
             echo -e "State file: ${BOLD}${STATE_FILE}${RESET}\n"
-
-            echo "Search directories:"
-            for dir in "${SCRIPT_SEARCH_DIRS[@]}"; do
-                if [[ -d "$dir" ]]; then
-                    echo -e "  ${GREEN}✓${RESET} $dir"
-                else
-                    echo -e "  ${RED}✗${RESET} $dir ${RED}(not found)${RESET}"
-                fi
-            done
-            echo ""
-
+            
+            if [[ ! -d "$SCRIPT_DIR" ]]; then
+                echo -e "${RED}WARNING: Script directory does not exist!${RESET}\n"
+            fi
+            
             echo "Execution plan:"
             echo ""
-
+            
             local i=0
             local completed_count=0
             local missing_count=0
-
+            
             for entry in "${INSTALL_SEQUENCE[@]}"; do
                 ((++i))
                 local mode="${entry%%|*}"
                 local rest="${entry#*|}"
                 mode=$(trim "$mode")
                 rest=$(trim "$rest")
-
+                
                 local filename args
                 read -r filename args <<< "$rest"
-
+                
                 local mode_label="USER"
                 [[ "$mode" == "S" ]] && mode_label="SUDO"
-
+                
                 local status=""
-
-                if ! resolve_script "$filename" > /dev/null; then
+                
+                if [[ ! -f "${SCRIPT_DIR}/${filename}" ]]; then
                     status="${RED}[MISSING]${RESET}"
                     ((++missing_count))
-                elif [[ -f "$STATE_FILE" ]] && grep -Fxq -- "$filename" "$STATE_FILE" 2>/dev/null; then
+                elif [[ -f "$STATE_FILE" ]] && grep -Fxq "$filename" "$STATE_FILE" 2>/dev/null; then
                     status="${GREEN}[DONE]${RESET}"
                     ((++completed_count))
                 else
                     status="${BLUE}[PENDING]${RESET}"
                 fi
-
+                
                 printf "  %3d. [%s] %-45s %s\n" "$i" "$mode_label" "${filename}${args:+ $args}" "$status"
             done
-
+            
             echo ""
             echo -e "${BOLD}Summary:${RESET}"
             echo -e "  Total scripts: $i"
@@ -422,27 +357,14 @@ main() {
             rm -f "$STATE_FILE"
             echo "State file reset. Starting fresh."
             ;;
-        "")
-            ;;
-        *)
-            echo -e "${RED}ERROR: Unknown option '${1}'${RESET}"
-            echo "Use --help to see available options."
-            exit 1
-            ;;
     esac
 
-    # --- CONCURRENT EXECUTION GUARD ---
-    exec 9>"$LOCK_FILE"
-    if ! flock -n 9; then
-        echo -e "${RED}ERROR: Another instance of this script is already running.${RESET}"
-        exit 1
-    fi
-
     setup_logging
-    validate_search_dirs
+    
+    # [NEW] Pre-flight Validation Check
     preflight_check
-
-    # Start timer
+    
+    # FIX: Start timer
     local start_ts=$SECONDS
 
     # Check for sudo requirement
@@ -456,6 +378,9 @@ main() {
     fi
 
     touch "$STATE_FILE"
+
+    # IMPORTANT: We switch to the hardcoded directory so filenames match
+    cd "$SCRIPT_DIR" || { log "ERROR" "Failed to cd to $SCRIPT_DIR"; exit 1; }
 
     # --- SESSION RECOVERY PROMPT ---
     if [[ -s "$STATE_FILE" ]]; then
@@ -484,65 +409,64 @@ main() {
     local total_scripts=${#INSTALL_SEQUENCE[@]}
     local current_index=0
     log "INFO" "Processing ${total_scripts} scripts..."
-
+    
     local SKIPPED_OR_FAILED=()
 
-    EXECUTION_PHASE=1
-
     for entry in "${INSTALL_SEQUENCE[@]}"; do
+        # CRITICAL FIX: Use pre-increment ((++var)) instead of post-increment ((var++))
+        # Post-increment on 0 returns 0, which 'set -o errexit' treats as a failure!
         ((++current_index))
-
+        
         local mode="${entry%%|*}"
         local rest="${entry#*|}"
-
+        
         mode=$(trim "$mode")
         rest=$(trim "$rest")
-
+        
         # Separate filename from arguments
         local filename args
         read -r filename args <<< "$rest"
-
-        # --- RESOLVE SCRIPT PATH ---
-        local script_path=""
-        while true; do
-            if script_path=$(resolve_script "$filename"); then
-                break
-            fi
-            report_search_locations "$filename"
+        
+        # --- MISSING FILE CHECK LOOP ---
+        while [[ ! -f "$filename" ]]; do
+            log "ERROR" "Script not found: $filename"
+            log "ERROR" "Looked in: $SCRIPT_DIR"
+            
             echo -e "${YELLOW}Action Required:${RESET} File is missing."
             read -r -p "Do you want to [S]kip to next, [R]etry check, or [Q]uit? (s/r/q): " _choice
-
+            
             case "${_choice,,}" in
                 s|skip)
                     log "WARN" "Skipping $filename (User Selection)"
                     SKIPPED_OR_FAILED+=("$filename")
-                    continue 2
+                    continue 2 
                     ;;
                 r|retry)
                     log "INFO" "Retrying check for $filename..."
                     sleep 1
                     ;;
                 *)
-                    log "INFO" "Stopping execution. Place the script in one of the search directories and rerun."
+                    log "INFO" "Stopping execution. Please place the script in the correct location and rerun."
                     exit 1
                     ;;
             esac
         done
-
-        # --- STATE FILE SKIP CHECK ---
-        if grep -Fxq -- "$filename" "$STATE_FILE"; then
+        
+        if grep -Fxq "$filename" "$STATE_FILE"; then
+            # RESTORED: Logging of skipped files
             log "WARN" "[${current_index}/${total_scripts}] Skipping $filename (Already Completed)"
             continue
         fi
 
         # --- USER CONFIRMATION PROMPT (CONDITIONAL) ---
         if [[ $interactive_mode -eq 1 ]]; then
+            # [NEW] Get description for better UX
             local desc
-            desc=$(get_script_description "$script_path")
-
-            echo -e "\n${YELLOW}>>> NEXT SCRIPT [${current_index}/${total_scripts}]:${RESET} $filename${args:+ $args} ($mode)"
+            desc=$(get_script_description "$filename")
+            
+            echo -e "\n${YELLOW}>>> NEXT SCRIPT [${current_index}/${total_scripts}]:${RESET} $filename ${args:+ $args} ($mode)"
             echo -e "    ${BOLD}Description:${RESET} $desc"
-
+            
             read -r -p "Do you want to [P]roceed, [S]kip, or [Q]uit? (p/s/q): " _user_confirm
             case "${_user_confirm,,}" in
                 s|skip)
@@ -562,43 +486,41 @@ main() {
 
         # --- EXECUTION RETRY LOOP ---
         while true; do
-            log "RUN" "[${current_index}/${total_scripts}] Executing: ${filename}${args:+ $args} ($mode)"
+            # FIX: Added Progress Counter
+            log "RUN" "[${current_index}/${total_scripts}] Executing: $filename $args ($mode)"
 
             local result=0
-            set -f
             if [[ "$mode" == "S" ]]; then
-                (cd "$(dirname "$script_path")" && sudo bash "$(basename "$script_path")" $args) || result=$?
+                sudo bash "$filename" $args || result=$?
             elif [[ "$mode" == "U" ]]; then
-                (cd "$(dirname "$script_path")" && bash "$(basename "$script_path")" $args) || result=$?
+                bash "$filename" $args || result=$?
             else
                 log "ERROR" "Invalid mode '$mode' in config. Use 'S' or 'U'."
                 exit 1
             fi
-            set +f
 
             if [[ $result -eq 0 ]]; then
                 echo "$filename" >> "$STATE_FILE"
                 log "SUCCESS" "Finished $filename"
-                if [[ "$POST_SCRIPT_DELAY" != "0" ]]; then
-                    sleep "$POST_SCRIPT_DELAY"
-                fi
-                break
+                sleep 1
+                break # Success: Break retry loop, move to next script
             else
                 log "ERROR" "Failed $filename (Exit Code: $result)."
-
+                
+                # --- EXECUTION FAIL PROMPT ---
                 echo -e "${YELLOW}Action Required:${RESET} Script execution failed."
                 read -r -p "Do you want to [S]kip to next, [R]etry, or [Q]uit? (s/r/q): " _fail_choice
-
+                
                 case "${_fail_choice,,}" in
                     s|skip)
                         log "WARN" "Skipping $filename (User Selection). NOT marking as complete."
                         SKIPPED_OR_FAILED+=("$filename")
-                        break
+                        break # Break retry loop, move to next script
                         ;;
                     r|retry)
                         log "INFO" "Retrying $filename..."
                         sleep 1
-                        continue
+                        continue # Restart retry loop
                         ;;
                     *)
                         log "INFO" "Stopping execution as requested."
@@ -608,7 +530,7 @@ main() {
             fi
         done
     done
-
+    
     # --- SUMMARY OF FAILED / SKIPPED SCRIPTS ---
     if [[ ${#SKIPPED_OR_FAILED[@]} -gt 0 ]]; then
         echo -e "\n${YELLOW}================================================================${RESET}"
@@ -616,20 +538,19 @@ main() {
         for f in "${SKIPPED_OR_FAILED[@]}"; do
             echo " - $f"
         done
-        echo -e "\nYou can run them individually from their respective directories:"
-        for dir in "${SCRIPT_SEARCH_DIRS[@]}"; do
-            [[ -d "$dir" ]] && echo -e "  ${BOLD}${dir}/${RESET}"
-        done
+        echo -e "\nIf there were scripts that failed, you can run them individually from:"
+        echo -e "${BOLD}${SCRIPT_DIR}/${RESET}"
         echo -e "${YELLOW}================================================================${RESET}\n"
     fi
 
-    # Calculate elapsed time
+    # FIX: Calculate elapsed time
     local end_ts=$SECONDS
     local duration=$((end_ts - start_ts))
     local minutes=$((duration / 60))
     local seconds=$((duration % 60))
 
     # --- COMPLETION & REBOOT NOTICE ---
+    # RESTORED: Original verbose instructions with timer added
     echo -e "\n${GREEN}================================================================${RESET}"
     echo -e "${BOLD}FINAL INSTRUCTIONS:${RESET}"
     echo -e "1. Execution Time: ${BOLD}${minutes}m ${seconds}s${RESET}"
