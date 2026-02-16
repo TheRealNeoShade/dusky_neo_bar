@@ -76,6 +76,7 @@ declare -A CUSTOM_SCRIPT_PATHS=(
     ["package_installation.sh"]="user_scripts/misc_extra/package_installation.sh"
     ["copy_service_files.sh"]="user_scripts/misc_extra/copy_service_files.sh"
     ["update_checker.sh"]="user_scripts/update_dusky/update_checker/update_checker.sh"
+    ["cc_restart.sh"]="user_scripts/dusky_system/reload_cc/cc_restart.sh"
 )
 
 # ------------------------------------------------------------------------------
@@ -183,6 +184,7 @@ declare -ra UPDATE_SEQUENCE=(
     "U | copy_service_files.sh --default"
     "U | update_checker.sh --num"
     "S | package_installation.sh"
+    "U | cc_restart.sh"
 )
 
 # ==============================================================================
