@@ -244,7 +244,8 @@ cmd_list() {
     done < <(find "${PINS_DIR:?}" -maxdepth 1 -name '*.pin' -type f -printf '%T@\t%p\n' 2>/dev/null | sort -rn | cut -f2)
 
     # --- History Items (Zero-Fork Pipeline) ---
-    cliphist list 2>/dev/null | awk \
+    # OPTIMIZATION: LC_ALL=C ensures 'tolower' works correctly on non-English locales (Template Compliance)
+    cliphist list 2>/dev/null | LC_ALL=C awk \
         -v pin_count="$n" \
         -v icon_img="$ICON_IMG" \
         -v sep="$SEP" \

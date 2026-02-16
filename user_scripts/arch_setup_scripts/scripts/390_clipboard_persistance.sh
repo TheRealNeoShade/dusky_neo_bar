@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# UWSM Clipboard Persistence Manager - v1.1.0 (Hardened)
+# UWSM Clipboard Persistence Manager - v1.2.0 (Hardened + Automation)
 # -----------------------------------------------------------------------------
 # Target: Arch Linux / Hyprland / UWSM / Wayland
 #
 # Description: Toggles cliphist persistence in ~/.config/uwsm/env
 #              by commenting/uncommenting the CLIPHIST_DB_PATH export.
 #
+# v1.2.0 CHANGELOG:
+#   - FEAT: Added --ram and --disk flags for non-interactive automation.
+#   - REF:  Conditional TTY check (only required for interactive mode).
 # v1.1.0 CHANGELOG:
 #   - CRITICAL: Replaced sed -i with atomic awk + cat to preserve symlinks.
 #   - FIX: Proper cleanup trap function instead of inline trap.
@@ -44,6 +47,28 @@ declare -r TARGET_LINE='export CLIPHIST_DB_PATH="${XDG_RUNTIME_DIR}/cliphist.db"
 declare _TMPFILE=""
 
 # =============================================================================
+# Argument Parsing (v1.2.0)
+# =============================================================================
+declare _TARGET_MODE=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --ram)
+            _TARGET_MODE="ephemeral"
+            shift
+            ;;
+        --disk)
+            _TARGET_MODE="persistent"
+            shift
+            ;;
+        *)
+            printf '%s[ERROR]%s Unknown argument: %s\n' "$C_RED" "$C_RESET" "$1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# =============================================================================
 # Logging
 # =============================================================================
 log_info()    { printf '%s[INFO]%s %s\n'    "$C_BLUE"   "$C_RESET" "$1"; }
@@ -75,9 +100,10 @@ if (( BASH_VERSINFO[0] < 5 )); then
     exit 1
 fi
 
-# TTY check (we need interactive input)
-if [[ ! -t 0 ]]; then
+# TTY check (Only required if NO automation flags provided)
+if [[ -z "$_TARGET_MODE" && ! -t 0 ]]; then
     log_err "Interactive TTY required."
+    log_info "Use --ram or --disk for non-interactive mode."
     exit 1
 fi
 
@@ -185,41 +211,55 @@ update_config() {
 }
 
 # =============================================================================
-# User Interface
+# User Interface (Hybrid)
 # =============================================================================
-clear
-printf '%sUWSM Clipboard Persistence Manager%s\n' "$C_BOLD" "$C_RESET"
-printf 'Target: %s\n\n' "$CONFIG_FILE"
 
-printf '%sWhich mode do you prefer?%s\n\n' "$C_BOLD" "$C_RESET"
-
-printf '  %s1) Ephemeral (RAM-based)%s\n' "$C_BOLD" "$C_RESET"
-printf '     - Clipboard history is stored in RAM.\n'
-printf '     - It %sdisappears%s when you reboot or shutdown.\n' "$C_RED" "$C_RESET"
-printf '     - Good for privacy and saving disk writes.\n\n'
-
-printf '  %s2) Persistent (Disk-based)%s\n' "$C_BOLD" "$C_RESET"
-printf '     - Clipboard history is stored on your hard drive.\n'
-printf '     - Your history %sstays available%s even after you reboot.\n' "$C_GREEN" "$C_RESET"
-printf '     - Standard behavior for most users.\n\n'
-
-read -rp "Select option [1/2] (default: 1): " choice
-choice="${choice:-1}"
-
-case "$choice" in
-    1)
-        log_info "Applying Ephemeral settings..."
+if [[ -n "$_TARGET_MODE" ]]; then
+    # --- Automated Mode ---
+    if [[ "$_TARGET_MODE" == "ephemeral" ]]; then
+        log_info "Applying Ephemeral settings (--ram)..."
         update_config "ephemeral"
-        ;;
-    2)
-        log_info "Applying Persistent settings..."
+    elif [[ "$_TARGET_MODE" == "persistent" ]]; then
+        log_info "Applying Persistent settings (--disk)..."
         update_config "persistent"
-        ;;
-    *)
-        log_err "Invalid selection. Exiting."
-        exit 1
-        ;;
-esac
+    fi
+
+else
+    # --- Interactive Mode ---
+    clear
+    printf '%sUWSM Clipboard Persistence Manager%s\n' "$C_BOLD" "$C_RESET"
+    printf 'Target: %s\n\n' "$CONFIG_FILE"
+
+    printf '%sWhich mode do you prefer?%s\n\n' "$C_BOLD" "$C_RESET"
+
+    printf '  %s1) Ephemeral (RAM-based)%s\n' "$C_BOLD" "$C_RESET"
+    printf '     - Clipboard history is stored in RAM.\n'
+    printf '     - It %sdisappears%s when you reboot or shutdown.\n' "$C_RED" "$C_RESET"
+    printf '     - Good for privacy and saving disk writes.\n\n'
+
+    printf '  %s2) Persistent (Disk-based)%s\n' "$C_BOLD" "$C_RESET"
+    printf '     - Clipboard history is stored on your hard drive.\n'
+    printf '     - Your history %sstays available%s even after you reboot.\n' "$C_GREEN" "$C_RESET"
+    printf '     - Standard behavior for most users.\n\n'
+
+    read -rp "Select option [1/2] (default: 1): " choice
+    choice="${choice:-1}"
+
+    case "$choice" in
+        1)
+            log_info "Applying Ephemeral settings..."
+            update_config "ephemeral"
+            ;;
+        2)
+            log_info "Applying Persistent settings..."
+            update_config "persistent"
+            ;;
+        *)
+            log_err "Invalid selection. Exiting."
+            exit 1
+            ;;
+    esac
+fi
 
 # =============================================================================
 # Post-Process
