@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# Dusky TUI Engine - Master v3.9.3
+# Dusky TUI Engine - Master v3.9.5
 # -----------------------------------------------------------------------------
 # Target: Arch Linux / Hyprland / UWSM / Wayland
+#
+# v3.9.5 CHANGELOG:
+#   - SECURITY: Switched to ENVIRON-based awk passing to prevent injection.
+#   - FIX: Added empty-file check before overwriting config (Data Loss Prevention).
+#   - FIX: Corrected Tab Click offset calculation (Bug 1.1).
+#   - UX: Added ellipsis (…) for truncated item labels.
 #
 # v3.9.3 CHANGELOG:
 #   - FEAT: Backported "Scrollable Tabs" & Clickable Arrows (Safe Layout).
@@ -44,7 +50,7 @@ shopt -s extglob
 # POINT THIS TO YOUR REAL CONFIG FILE
 declare -r CONFIG_FILE="${HOME}/.config/hypr/change_me.conf"
 declare -r APP_TITLE="Input Config Editor"
-declare -r APP_VERSION="v3.9.3 (Scrollable)"
+declare -r APP_VERSION="v3.9.5 (Hardened)"
 
 # Dimensions & Layout
 declare -ri MAX_DISPLAY_ROWS=14
@@ -303,12 +309,17 @@ write_value_to_file() {
         _TMPFILE=$(mktemp "${CONFIG_FILE}.tmp.XXXXXXXXXX")
     fi
 
-    if ! LC_ALL=C awk -v target_block="$block" -v target_key="$key" -v new_value="$new_val" '
+    # FIX (6.1): Use ENVIRON to prevent awk injection attacks
+    TARGET_BLOCK="$block" TARGET_KEY="$key" NEW_VALUE="$new_val" \
+    LC_ALL=C awk '
     BEGIN {
         depth = 0
         in_target = 0
         target_depth = 0
         replaced = 0
+        target_block = ENVIRON["TARGET_BLOCK"]
+        target_key = ENVIRON["TARGET_KEY"]
+        new_value = ENVIRON["NEW_VALUE"]
         do_block = (target_block != "")
     }
     {
@@ -377,7 +388,14 @@ write_value_to_file() {
         }
     }
     END { exit (replaced ? 0 : 1) }
-    ' "$CONFIG_FILE" > "$_TMPFILE"; then
+    ' "$CONFIG_FILE" > "$_TMPFILE" || {
+        rm -f "$_TMPFILE" 2>/dev/null || :
+        _TMPFILE=""
+        return 1
+    }
+
+    # FIX (2.4): Verify temp file integrity before truncating config
+    if [[ ! -s "$_TMPFILE" ]]; then
         rm -f "$_TMPFILE" 2>/dev/null || :
         _TMPFILE=""
         return 1
@@ -638,7 +656,14 @@ render_item_list() {
                 ;;
         esac
 
-        printf -v padded_item "%-${ITEM_PADDING}s" "${item:0:${ITEM_PADDING}}"
+        # FIX (4.2): Add ellipsis for truncated items
+        local max_len=$(( ITEM_PADDING - 1 ))
+        if (( ${#item} > ITEM_PADDING )); then
+            printf -v padded_item "%-${max_len}s…" "${item:0:max_len}"
+        else
+            printf -v padded_item "%-${ITEM_PADDING}s" "$item"
+        fi
+
         if (( ri == SELECTED_ROW )); then
             _ril_buf+="${C_CYAN} ➤ ${C_INVERSE}${padded_item}${C_RESET} : ${display}${CLR_EOL}"$'\n'
         else
@@ -957,7 +982,8 @@ handle_mouse() {
                 zone="${TAB_ZONES[i]}"
                 start="${zone%%:*}"
                 end="${zone##*:}"
-                if (( x >= start && x <= end )); then set_tab "$i"; return 0; fi
+                # FIX (1.1): Account for scroll offset in click target
+                if (( x >= start && x <= end )); then set_tab "$(( i + TAB_SCROLL_START ))"; return 0; fi
             done
         else
             go_back
