@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# Dusky TUI Package Selector - Master v2.7 (Geometry Fixed)
+# Dusky TUI Package Selector - Master v3.0 (Refactored)
 # -----------------------------------------------------------------------------
-# Based on Dusky TUI Engine v3.9.2
+# Based on Dusky TUI Engine v3.9.5
 # Target: Arch Linux / Hyprland / Paru / Yay
 # -----------------------------------------------------------------------------
 
@@ -14,7 +14,7 @@ shopt -s extglob
 # =============================================================================
 
 declare -r APP_TITLE="Dusky Optional Packages"
-declare -r APP_VERSION="v2.7 (Extended)"
+declare -r APP_VERSION="v3.0 (Template Engine)"
 
 # Format: Category | Package Name | Description
 readonly RAW_PKG_DATA="
@@ -255,6 +255,32 @@ compute_scroll_window() {
     if (( _vis_end > count )); then _vis_end=$count; fi
 }
 
+render_scroll_indicator() {
+    local -n _rsi_buf=$1
+    local position="$2"
+    local -i count=$3 boundary=$4
+
+    if [[ "$position" == "above" ]]; then
+        if (( SCROLL_OFFSET > 0 )); then
+            _rsi_buf+="${C_GREY}    ▲ (more above)${CLR_EOL}${C_RESET}"$'\n'
+        else
+            _rsi_buf+="${CLR_EOL}"$'\n'
+        fi
+    else
+        # "below"
+        if (( count > MAX_DISPLAY_ROWS )); then
+            local position_info="[$(( SELECTED_ROW + 1 ))/${count}]"
+            if (( boundary < count )); then
+                _rsi_buf+="${C_GREY}    ▼ (more below) ${position_info}${CLR_EOL}${C_RESET}"$'\n'
+            else
+                _rsi_buf+="${C_GREY}                   ${position_info}${CLR_EOL}${C_RESET}"$'\n'
+            fi
+        else
+            _rsi_buf+="${CLR_EOL}"$'\n'
+        fi
+    fi
+}
+
 render_item_list() {
     local -n _ril_buf=$1
     local -n _ril_items=$2
@@ -274,12 +300,19 @@ render_item_list() {
             check_mark="${C_GREY}[ ]${C_RESET}"
         fi
 
+        # Truncate description if too long (Ellipsis logic from Template)
         local max_desc_len=$(( BOX_INNER_WIDTH - ITEM_PADDING - 7 ))
         if (( ${#desc} > max_desc_len )); then
             desc="${desc:0:$((max_desc_len-1))}…"
         fi
 
-        printf -v padded_item "%-${ITEM_PADDING}s" "$item"
+        # Pad item name (Ellipsis logic applied to item name as well for safety)
+        local max_item_len=$(( ITEM_PADDING - 1 ))
+        if (( ${#item} > ITEM_PADDING )); then
+            printf -v padded_item "%-${max_item_len}s…" "${item:0:max_item_len}"
+        else
+            printf -v padded_item "%-${ITEM_PADDING}s" "$item"
+        fi
 
         if (( ri == SELECTED_ROW )); then
             _ril_buf+="${C_CYAN} ➤ ${check_mark} ${C_INVERSE}${padded_item}${C_RESET} ${C_DIM}${desc}${CLR_EOL}"$'\n'
@@ -288,6 +321,7 @@ render_item_list() {
         fi
     done
 
+    # Fill empty rows
     local -i rows_rendered=$(( _ril_ve - _ril_vs ))
     for (( ri = rows_rendered; ri < MAX_DISPLAY_ROWS; ri++ )); do
         _ril_buf+="${CLR_EOL}"$'\n'
@@ -319,14 +353,15 @@ draw_ui() {
     printf -v pad_buf '%*s' "$right_pad" ''
     buf+="${pad_buf}│${C_RESET}${CLR_EOL}"$'\n'
 
-    # --- Scrollable Tab Rendering ---
+    # --- Scrollable Tab Rendering (Sliding Window from Template) ---
     
     if (( TAB_SCROLL_START > CURRENT_TAB )); then
         TAB_SCROLL_START=$CURRENT_TAB
     fi
 
     local tab_line
-    local -i max_tab_width=74
+    # Use config width minus borders (2) and margins (4 approx)
+    local -i max_tab_width=$(( BOX_INNER_WIDTH - 6 ))
     
     # Reset arrow zones
     LEFT_ARROW_ZONE=""
@@ -338,7 +373,7 @@ draw_ui() {
         TAB_ZONES=()
         local -i used_len=0
         
-        # Left Indicator
+        # Left Arrow
         if (( TAB_SCROLL_START > 0 )); then
             tab_line+="${C_YELLOW}«${C_RESET} "
             LEFT_ARROW_ZONE="$current_col:$((current_col+1))" 
@@ -353,8 +388,7 @@ draw_ui() {
         for (( i = TAB_SCROLL_START; i < TAB_COUNT; i++ )); do
             local name="${TABS[i]}"
             local t_len=${#name}
-            # FIX: The visual output is " Name | " (L + 4 chars)
-            # 1 (Space) + L (Name) + 1 (Space) + 1 (Pipe) + 1 (Space) = L + 4
+            # Visual chars: Space + Name + Space + Pipe + Space = NameLen + 4
             local chunk_len=$(( t_len + 4 ))
             
             local reserve=0
@@ -403,14 +437,18 @@ draw_ui() {
     count=${#_draw_items_ref[@]}
 
     compute_scroll_window "$count"
+    
+    # Render Indicators and List
+    render_scroll_indicator buf "above" "$count" "$_vis_start"
     render_item_list buf _draw_items_ref "$_vis_start" "$_vis_end"
+    render_scroll_indicator buf "below" "$count" "$_vis_end"
 
     buf+=$'\n'"${C_CYAN} [Tab] Next Tab  [Sh+Tab] Prev Tab  [Space] Toggle  [Enter] Install  [q] Quit${C_RESET}${CLR_EOL}"$'\n'
-    buf+="${C_GREY} ${APP_VERSION} - Use arrow keys to navigate${C_RESET}${CLR_EOL}${CLR_EOS}"
+    buf+="${C_GREY} ${APP_VERSION} - Use j/k/Arrows to navigate${C_RESET}${CLR_EOL}${CLR_EOS}"
     printf '%s' "$buf"
 }
 
-# --- Input Handling ---
+# --- Input Handling (Template Robustness) ---
 
 navigate() {
     local -i dir=$1
@@ -418,6 +456,24 @@ navigate() {
     local -i count=${#_nav_items_ref[@]}
     if (( count == 0 )); then return 0; fi
     SELECTED_ROW=$(( (SELECTED_ROW + dir + count) % count ))
+}
+
+navigate_page() {
+    local -i dir=$1
+    local -n _navp_items_ref="TAB_ITEMS_${CURRENT_TAB}"
+    local -i count=${#_navp_items_ref[@]}
+    if (( count == 0 )); then return 0; fi
+    SELECTED_ROW=$(( SELECTED_ROW + dir * MAX_DISPLAY_ROWS ))
+    if (( SELECTED_ROW < 0 )); then SELECTED_ROW=0; fi
+    if (( SELECTED_ROW >= count )); then SELECTED_ROW=$(( count - 1 )); fi
+}
+
+navigate_end() {
+    local -i target=$1
+    local -n _nave_items_ref="TAB_ITEMS_${CURRENT_TAB}"
+    local -i count=${#_nave_items_ref[@]}
+    if (( count == 0 )); then return 0; fi
+    if (( target == 0 )); then SELECTED_ROW=0; else SELECTED_ROW=$(( count - 1 )); fi
 }
 
 switch_tab() {
@@ -476,17 +532,18 @@ handle_mouse() {
             if (( x >= start && x <= end )); then switch_tab 1; return 0; fi
         fi
 
-        # Check Tabs
+        # Check Tabs (Corrected offset logic from template)
         for (( i = 0; i < TAB_COUNT; i++ )); do
             if [[ -z "${TAB_ZONES[i]:-}" ]]; then continue; fi
             zone="${TAB_ZONES[i]}"
             start="${zone%%:*}"
             end="${zone##*:}"
-            if (( x >= start && x <= end )); then set_tab "$i"; return 0; fi
+            # Check click against visible zones
+            if (( x >= start && x <= end )); then set_tab "$(( i + TAB_SCROLL_START ))"; return 0; fi
         done
     fi
 
-    local -i effective_start=$(( ITEM_START_ROW))
+    local -i effective_start=$(( ITEM_START_ROW + 1 )) # +1 for top scroll indicator
     
     if (( y >= effective_start && y < effective_start + MAX_DISPLAY_ROWS )); then
         local -i clicked_idx=$(( y - effective_start + SCROLL_OFFSET ))
@@ -517,6 +574,36 @@ read_escape_seq() {
     return 0
 }
 
+handle_key_action() {
+    local key="$1"
+    case "$key" in
+        '[A'|'OA')           navigate -1; return ;;
+        '[B'|'OB')           navigate 1; return ;;
+        '[C'|'OC')           switch_tab 1; return ;;
+        '[D'|'OD')           switch_tab -1; return ;;
+        '[Z')                switch_tab -1; return ;;
+        '[5~')               navigate_page -1; return ;;
+        '[6~')               navigate_page 1; return ;;
+        '[H'|'[1~')          navigate_end 0; return ;;
+        '[F'|'[4~')          navigate_end 1; return ;;
+        '['*'<'*[Mm])        handle_mouse "$key"; return ;;
+    esac
+
+    case "$key" in
+        k|K)            navigate -1 ;;
+        j|J)            navigate 1 ;;
+        l|L)            switch_tab 1 ;;
+        h|H)            switch_tab -1 ;;
+        g)              navigate_end 0 ;;
+        G)              navigate_end 1 ;;
+        $'\t')          switch_tab 1 ;;
+        ' ')            toggle_current ;;
+        ''|$'\n')       DO_INSTALL=1; return 1 ;; # Break loop to install
+        q|Q|$'\x03')    DO_INSTALL=0; return 1 ;; # Break loop to exit
+    esac
+    return 0
+}
+
 main_loop() {
     printf '%s%s%s%s' "$MOUSE_ON" "$CURSOR_HIDE" "$CLR_SCREEN" "$CURSOR_HOME"
     
@@ -536,18 +623,9 @@ main_loop() {
             fi
         fi
 
-        case "$key" in
-            '[A'|'OA'|k|K)   navigate -1 ;;
-            '[B'|'OB'|j|J)   navigate 1 ;;
-            '[C'|'OC'|l|L)   switch_tab 1 ;;
-            '[D'|'OD'|h|H)   switch_tab -1 ;;
-            $'\t')           switch_tab 1 ;;
-            '[Z')            switch_tab -1 ;; 
-            '['*'<'*[Mm])    handle_mouse "$key" ;;
-            ' ')             toggle_current ;;
-            '')              DO_INSTALL=1; break ;; 
-            q|Q|$'\x03')     DO_INSTALL=0; break ;; 
-        esac
+        if ! handle_key_action "$key"; then
+            break
+        fi
     done
 }
 
