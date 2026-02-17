@@ -40,6 +40,8 @@ declare -r C_BOLD=$'\033[1m'
 declare -r CONFIG_DIR="${HOME}/.config/uwsm"
 declare -r CONFIG_FILE="${CONFIG_DIR}/env"
 declare -r TARGET_LINE='export CLIPHIST_DB_PATH="${XDG_RUNTIME_DIR}/cliphist.db"'
+declare -r STATE_DIR="${HOME}/.config/dusky/settings"
+declare -r STATE_FILE="${STATE_DIR}/clipboard_persistance"
 
 # =============================================================================
 # Temp File Global (for cleanup safety)
@@ -145,11 +147,14 @@ fi
 
 update_config() {
     local mode="$1"
+    
+    mkdir -p "$STATE_DIR"
 
     if [[ "$mode" == "ephemeral" ]]; then
         # Check if already uncommented (active)
         if grep -q "^${TARGET_LINE}" "$CONFIG_FILE"; then
             log_info "Config is already set to Ephemeral."
+            echo "false" > "$STATE_FILE"
             return 0
         fi
 
@@ -174,12 +179,14 @@ update_config() {
         rm -f "$_TMPFILE"
         _TMPFILE=""
 
+        echo "false" > "$STATE_FILE"
         log_success "Set to Ephemeral. (Line uncommented)."
 
     elif [[ "$mode" == "persistent" ]]; then
         # Check if already commented (inactive)
         if grep -q '^\s*#\s*export CLIPHIST_DB_PATH=' "$CONFIG_FILE"; then
             log_info "Config is already set to Persistent."
+            echo "true" > "$STATE_FILE"
             return 0
         fi
 
@@ -204,6 +211,7 @@ update_config() {
         rm -f "$_TMPFILE"
         _TMPFILE=""
 
+        echo "true" > "$STATE_FILE"
         log_success "Set to Persistent. (Line commented out)."
     fi
 
