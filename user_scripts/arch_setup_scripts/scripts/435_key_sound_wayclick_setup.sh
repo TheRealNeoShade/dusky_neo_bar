@@ -43,7 +43,7 @@ case "${1:-}" in
 esac
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
-# ║  USER CONFIGURATION — Tune these to your preference                        ║
+# ║  USER CONFIGURATION — Tune these to your preference                      ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
 # Audio pack: subfolder name inside ~/.config/wayclick/ containing .wav files.
@@ -91,7 +91,7 @@ readonly HOTPLUG_POLL_SECONDS="1.0"
 readonly DEBUG_MODE="false"
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
-# ║  INTERNAL CONFIGURATION — Change only if you know what you're doing        ║
+# ║  INTERNAL CONFIGURATION — Change only if you know what you're doing      ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
 readonly APP_NAME="wayclick"
@@ -197,7 +197,7 @@ declare -a NEEDED_DEPS=()
 command -v uv >/dev/null 2>&1          || NEEDED_DEPS+=("uv")
 command -v notify-send >/dev/null 2>&1 || NEEDED_DEPS+=("libnotify")
 
-if [[ ! -f "$BASE_DIR/.build_marker_v8" ]]; then
+if [[ ! -f "$BASE_DIR/.build_marker_v9" ]]; then
     command -v gcc >/dev/null 2>&1 || NEEDED_DEPS+=("gcc")
 
     sdl_deps=("sdl2" "sdl2_mixer" "sdl2_image" "sdl2_ttf")
@@ -210,10 +210,10 @@ if (( ${#NEEDED_DEPS[@]} > 0 )); then
     if $INTERACTIVE; then
         clear
         printf "%b
-╔══════════════════════════════════════════════════════════════╗
-║  %bWAYCLICK ELITE%b                                          ║
-║  %bHotplug • User Mode • Native CPU • Contained%b            ║
-╚══════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  %bWAYCLICK ELITE%b                                                          ║
+║  %bHotplug • User Mode • Native CPU • Contained%b                            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 %b" "${C_CYAN}" "${C_GREEN}" "${C_CYAN}" "${C_DIM}" "${C_CYAN}" "${C_RESET}"
 
         printf "%b[SETUP]%b Missing system dependencies:%b %s%b\n" \
@@ -311,7 +311,7 @@ if [[ ! -d "$VENV_DIR" ]]; then
     uv venv "$VENV_DIR" --python 3.14 --quiet
 fi
 
-MARKER_FILE="$BASE_DIR/.build_marker_v8"
+MARKER_FILE="$BASE_DIR/.build_marker_v9"
 
 if [[ ! -f "$MARKER_FILE" ]]; then
     if ! $INTERACTIVE; then
@@ -326,15 +326,19 @@ if [[ ! -f "$MARKER_FILE" ]]; then
     export CXXFLAGS="$CFLAGS"
     export LDFLAGS="-Wl,-O2,--sort-common,--as-needed,-z,now,--relax -flto=auto"
 
+    # --no-binary targets ONLY our runtime libraries (evdev, pygame-ce).
+    # Build tools (cmake, ninja, scikit-build-core) use pre-built wheels.
+    # This avoids needing 'make' on fresh installs while still compiling
+    # the hot-path C extensions with native CPU flags.
     uv pip install --python "$PYTHON_BIN" \
-        --no-binary :all: \
+        --no-binary evdev --no-binary pygame-ce \
         --no-cache \
         --compile-bytecode \
         evdev pygame-ce
 
     printf "%b[BUILD]%b Attempting uvloop (optional, faster event loop)...\n" "${C_BLUE}" "${C_RESET}"
     uv pip install --python "$PYTHON_BIN" \
-        --no-binary :all: \
+        --no-binary uvloop \
         --no-cache \
         --compile-bytecode \
         uvloop 2>/dev/null \
@@ -394,9 +398,6 @@ raw_keywords = os.environ.get('WC_EXCLUDED_KEYWORDS', 'touchpad,trackpad')
 EXCLUDED_KEYWORDS = [x.strip().lower() for x in raw_keywords.split(',') if x.strip()]
 
 # === TOUCHPAD CAPABILITY CONSTANTS ===
-# EV_ABS = 3, ABS_MT_POSITION_X = 0x35 (53) — multitouch X axis
-# BTN_TOOL_FINGER = 0x145 (325) — "finger on surface" indicator
-# Together these catch ALL touchpads regardless of manufacturer naming.
 _EV_ABS = 3
 _ABS_MT_POSITION_X = 0x35
 _BTN_TOOL_FINGER = 0x145
@@ -548,7 +549,6 @@ async def main():
                     caps = dev.capabilities(absinfo=False)
 
                     if not ENABLE_TRACKPADS:
-                        # Check 1: Name-based keyword blacklist
                         name_lower = dev.name.lower()
                         keyword_match = any(k in name_lower for k in EXCLUDED_KEYWORDS)
 
@@ -558,7 +558,6 @@ async def main():
                             skipped_paths.add(path)
                             continue
 
-                        # Check 2: Capability-based auto-detection (if enabled)
                         if AUTO_DETECT:
                             abs_codes = caps.get(_EV_ABS, [])
                             key_codes = caps.get(1, [])
@@ -571,7 +570,7 @@ async def main():
                                 skipped_paths.add(path)
                                 continue
 
-                    if 1 in caps:  # EV_KEY
+                    if 1 in caps:
                         task = asyncio.create_task(read_device(dev, stop))
                         monitored_tasks[path] = task
                     else:
