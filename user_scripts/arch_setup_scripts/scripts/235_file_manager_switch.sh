@@ -118,6 +118,14 @@ detect_current_fm() {
 write_fm_switch() {
     local target_fm="$1"
 
+    # Write state file for Dusky FIRST, so it triggers even if already set
+    mkdir -p "${HOME}/.config/dusky/settings"
+    if [[ "$target_fm" == "yazi" ]]; then
+        printf "true\n" > "${HOME}/.config/dusky/settings/filemanager_switch"
+    else
+        printf "false\n" > "${HOME}/.config/dusky/settings/filemanager_switch"
+    fi
+
     if [[ "$CURRENT_FM" == "$target_fm" ]]; then
         STATUS_MSG="${C_YELLOW}Already set to ${target_fm}. No changes made.${C_RESET}"
         return 0
@@ -177,14 +185,6 @@ write_fm_switch() {
     local desktop_file="${new_fm}.desktop"
     if command -v xdg-mime &>/dev/null; then
         xdg-mime default "$desktop_file" inode/directory 2>/dev/null || :
-    fi
-
-    # Write state file for Dusky
-    mkdir -p "${HOME}/.config/dusky/settings"
-    if [[ "$new_fm" == "yazi" ]]; then
-        printf "true\n" > "${HOME}/.config/dusky/settings/filemanager_switch"
-    else
-        printf "false\n" > "${HOME}/.config/dusky/settings/filemanager_switch"
     fi
 
     post_write_action
