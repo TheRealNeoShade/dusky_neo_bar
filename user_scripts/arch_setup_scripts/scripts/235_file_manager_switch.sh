@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Toggles file manager between Thunar (GUI) and Yazi (TUI)
-#
-## =============================================================================
+# =============================================================================
 # USAGE & AUTOMATION FLAGS
 # =============================================================================
 # This script operates in two modes: Interactive (TUI) and Headless (Automation).
@@ -18,6 +16,7 @@
 #                    ~/.config/dusky/settings/filemanager_switch.
 #                    Applies Yazi if 'true', Thunar if 'false'.
 #                    Ideal for Hyprland exec-once or systemd startup hooks.
+#                    Gracefully exits if the state file does not exist yet.
 #
 # Note: Flag combinations are intentionally unsupported to guarantee atomic,
 # predictable execution. Only the first argument ($1) is evaluated.
@@ -432,9 +431,12 @@ main() {
             ;;
         --apply-state)
             local state_file="${HOME}/.config/dusky/settings/filemanager_switch"
+
+            # CRITICAL FIX: Graceful fallback for fresh installs/missing state
             if [[ ! -f "$state_file" ]]; then
-                log_err "State file missing: ${state_file}"
-                exit 1
+                STATUS_MSG="${C_YELLOW}State file missing. Preserving current file manager: ${CURRENT_FM}${C_RESET}"
+                printf '%s\n' "$STATUS_MSG"
+                exit 0
             fi
 
             # Robust read: handles missing EOF newline gracefully
