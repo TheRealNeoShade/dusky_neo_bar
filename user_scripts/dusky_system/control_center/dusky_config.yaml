@@ -1992,7 +1992,55 @@ pages:
                       type: exec
                       command: kitty --class dusky_tui_wayclick.sh --hold sh -c "$HOME/user_scripts/wayclick/dusky_tui_wayclick.sh"
                       terminal: false
+    - type: navigation
+      properties:
+        title: Neovim Setup & Maintenance
+        description: Manage configuration and repair plugins
+        icon: text-editor-symbolic
+      layout:
+        - type: section
+          properties:
+            title: Configuration
+            description: Main management tools
+          items:
+            - type: button
+              properties:
+                title: Neovim Manager
+                description: Main configuration and setup wizard
+                icon: preferences-system-symbolic
+                style: suggested
+                button_text: "Open"
+              on_press:
+                type: exec
+                command: kitty --class dusky_neovim_manager.sh --hold sh -c "$HOME/user_scripts/nvim/reset/dusky_neovim_manager.sh"
+                terminal: false
 
+        - type: section
+          properties:
+            title: Maintenance & Recovery
+            description: Use these if Neovim is failing to launch or sync
+          items:
+            - type: button
+              properties:
+                title: "Step 1: Clean"
+                description: Remove Neovim cache and data (Reset)
+                icon: user-trash-symbolic
+                style: destructive
+                button_text: "Clean"
+              on_press:
+                type: exec
+                command: kitty --class 01_reset_neovim.sh --hold sh -c "$HOME/user_scripts/nvim/reset/01_reset_neovim.sh"
+                terminal: false
+            - type: button
+              properties:
+                title: "Step 2: Sync"
+                description: Re-download and sync Lazy plugins
+                icon: view-refresh-symbolic
+                button_text: "Sync"
+              on_press:
+                type: exec
+                command: kitty --class 02_cli_plugins_download.sh --hold sh -c "$HOME/user_scripts/nvim/reset/02_cli_plugins_download.sh"
+                terminal: false
   - type: section
     properties:
       title: Applications
