@@ -11,31 +11,31 @@ pages:
       properties:
         title: Bluetooth
         icon: bluetooth-active-symbolic
-        state_command: "bluetoothctl show | grep 'Powered: yes' | awk '{print $2}'"
+        state_command: "rfkill list bluetooth | grep -q 'Soft blocked: no' && echo yes"
         interval: 5
       on_toggle:
         enabled:
           type: exec
-          command: bluetoothctl power on && notify-send 'Bluetooth' 'Bluetooth Turned ON'
+          command: rfkill unblock bluetooth && notify-send 'Bluetooth' 'Bluetooth Turned ON'
           terminal: false
         disabled:
           type: exec
-          command: bluetoothctl power off && notify-send 'Bluetooth' 'Bluetooth Turned OFF'
+          command: rfkill block bluetooth && notify-send 'Bluetooth' 'Bluetooth Turned OFF'
           terminal: false
     - type: toggle_card
       properties:
         title: Wi-Fi
         icon: network-wireless-symbolic
-        state_command: nmcli radio wifi
+        state_command: "rfkill list wifi | grep -q 'Soft blocked: no' && echo yes"
         interval: 5
       on_toggle:
         enabled:
           type: exec
-          command: nmcli radio wifi on && notify-send 'Wi-Fi' 'Wireless Radio Turned ON'
+          command: rfkill unblock wifi && notify-send 'Wi-Fi' 'Wireless Radio Turned ON'
           terminal: false
         disabled:
           type: exec
-          command: nmcli radio wifi off && notify-send 'Wi-Fi' 'Wireless Radio Turned OFF'
+          command: rfkill block wifi && notify-send 'Wi-Fi' 'Wireless Radio Turned OFF'
           terminal: false
     - type: toggle_card
       properties:
@@ -508,33 +508,33 @@ pages:
           terminal: false
     - type: toggle_card
       properties:
-        title: Wi-Fi
-        icon: network-wireless-symbolic
-        state_command: nmcli radio wifi
+        title: Bluetooth
+        icon: bluetooth-active-symbolic
+        state_command: "rfkill list bluetooth | grep -q 'Soft blocked: no' && echo yes"
         interval: 5
       on_toggle:
         enabled:
           type: exec
-          command: kitty --class wifitui --title "Wi-Fi Manager" --hold sh -c "wifitui"
+          command: rfkill unblock bluetooth && notify-send 'Bluetooth' 'Bluetooth Turned ON'
           terminal: false
         disabled:
           type: exec
-          command: kitty --class wifitui --title "Wi-Fi Manager" --hold sh -c "wifitui"
+          command: rfkill block bluetooth && notify-send 'Bluetooth' 'Bluetooth Turned OFF'
           terminal: false
     - type: toggle_card
       properties:
-        title: Bluetooth
-        icon: bluetooth-active-symbolic
-        state_command: "bluetoothctl show | grep 'Powered: yes' | awk '{print $2}'"
+        title: Wi-Fi
+        icon: network-wireless-symbolic
+        state_command: "rfkill list wifi | grep -q 'Soft blocked: no' && echo yes"
         interval: 5
       on_toggle:
         enabled:
           type: exec
-          command: kitty --class bluetui --title "Bluetooth Manager" --hold sh -c "bluetui"
+          command: rfkill unblock wifi && notify-send 'Wi-Fi' 'Wireless Radio Turned ON'
           terminal: false
         disabled:
           type: exec
-          command: kitty --class bluetui --title "Bluetooth Manager" --hold sh -c "bluetui"
+          command: rfkill block wifi && notify-send 'Wi-Fi' 'Wireless Radio Turned OFF'
           terminal: false
 
   - type: section
