@@ -29,7 +29,7 @@ fi
 
 readonly SYMLINK_MAP=(
     # [DBus] Dusky Control Center Activation
-    "$HOME/user_scripts/dusky_system/control_center/service/dbus_activation.service | $HOME/.local/share/dbus-1/services/com.github.dusky.controlcenter.service"
+    "$HOME/user_scripts/dusky_system/control_center/service/com.github.dusky.controlcenter.service | $HOME/.local/share/dbus-1/services/com.github.dusky.controlcenter.service"
 )
 
 # ==============================================================================
