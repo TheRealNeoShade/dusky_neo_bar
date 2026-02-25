@@ -123,7 +123,19 @@ detect_topology() {
         done < <({ lspci -n -d 10de::0300; lspci -n -d 10de::0302; } 2>/dev/null)
     fi
 
+    # --- PHASE 3: Virtualization Guard (The Fix) ---
     if [[ $((HAS_INTEL + HAS_AMD + HAS_NVIDIA)) -eq 0 ]]; then
+        # Check for VirtIO (1af4), VMware (15ad), or VirtualBox (80ee) Graphics
+        local vm_gpu
+        vm_gpu=$({ lspci -d 1af4::0300; lspci -d 15ad::0300; lspci -d 80ee::0300; } 2>/dev/null | head -n1)
+
+        if [[ -n "$vm_gpu" ]]; then
+            log_warn "Virtual GPU detected ($vm_gpu)."
+            log_ok "Skipping driver installation for Virtual Machine."
+            exit 0  # <--- Graceful Exit (Success)
+        fi
+
+        # If strict check fails AND it's not a known VM GPU:
         die "No GPUs detected via Sysfs OR lspci. Hardware failure or deep sleep?"
     fi
 }
