@@ -596,7 +596,7 @@ draw_tabs() {
             current_col=$(( current_col + chunk_len ))
         done
 
-        local -i pad=$(( BOX_INNER_WIDTH - used_len - 1 ))
+        local pad=$(( BOX_INNER_WIDTH + 1 - used_len ))
         if (( pad > 0 )); then
             local pad_buf
             printf -v pad_buf '%*s' "$pad" ''
