@@ -7,6 +7,10 @@
 # Group 1: dusky_update
 pkgs_productivity=(
   "wl-clip-persist"
+
+  # nemo
+  "nemo" "nemo-fileroller" "file-roller" "gvfs" "gvfs-smb" "gvfs-mtp" "gvfs-gphoto2" "gvfs-google" "gvfs-nfs" "gvfs-afc" "gvfs-dnssd" "ffmpegthumbnailer" "webp-pixbuf-loader" "poppler-glib" "libgsf" "gnome-epub-thumbnailer" "resvg" "nemo-terminal" "nemo-python" "nemo-compare" "meld" "nemo-media-columns" "nemo-audio-tab" "nemo-image-converter" "nemo-emblems" "nemo-repairer" "nemo-share" "python-gobject" "dconf-editor" "xreader" "gst-libav" "gst-plugins-good" "nemo-fileroller" "nemo-audio-tab" "nemo-compare" "nemo-pastebin"
+
 )
 
 # --------------------------------------------------------------------------
