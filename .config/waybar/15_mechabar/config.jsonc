@@ -147,8 +147,8 @@
 
 	"custom/distro": {
 		"format": "󰣇",
-		"on-click": "rofi -show drun",
-		"tooltip-format": "Application Launcher"
+		"on-click": "gdbus call --session --dest com.github.dusky.controlcenter --object-path /com/github/dusky/controlcenter --method org.freedesktop.Application.Activate "{}"",
+		"tooltip-format": "Control Center"
 	},
 
 	"idle_inhibitor": {
