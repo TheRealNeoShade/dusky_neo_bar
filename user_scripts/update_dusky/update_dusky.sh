@@ -155,6 +155,7 @@ declare -ra UPDATE_SEQUENCE=(
 #    "U | 345_faster_whisper_cpu.sh"
 #    "S | 350_dns_systemd_resolve.sh"
 #    "U | 355_hyprexpo_plugin.sh"
+#    "U | 356_dusky_plugin_manager.sh"
 #    "U | 360_obsidian_pensive_vault_configure.sh"
 #    "U | 365_cache_purge.sh"
 #    "S | 370_arch_install_scripts_cleanup.sh"
