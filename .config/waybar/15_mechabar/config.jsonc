@@ -1,4 +1,6 @@
 {
+
+  "position": "top",
 	"modules-left": [
 		"group/user",
 		"custom/right_div#4",
