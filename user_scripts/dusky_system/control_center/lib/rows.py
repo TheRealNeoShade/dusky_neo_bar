@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import math
 import shlex
 import subprocess
 import threading
@@ -504,6 +505,7 @@ class AsyncPollingMixin:
     ) -> None:
         """
         Begin a periodic polling loop bound to a specific state *slot*.
+        Safely replaces any existing timer on the same slot.
         """
         if immediate:
             self._poll_command(slot, command, on_output, timeout)
@@ -511,6 +513,8 @@ class AsyncPollingMixin:
         with self._state.lock:
             if self._state.is_destroyed:
                 return
+            if slot.source_id > 0:
+                GLib.source_remove(slot.source_id)
             slot.source_id = GLib.timeout_add_seconds(
                 interval, self._poll_tick, slot, command, on_output, timeout,
             )
@@ -531,7 +535,6 @@ class AsyncPollingMixin:
                 return GLib.SOURCE_REMOVE
             if slot.is_running:
                 return GLib.SOURCE_CONTINUE
-            slot.is_running = True
 
         self._poll_command(slot, command, on_output, timeout)
         return GLib.SOURCE_CONTINUE
@@ -548,6 +551,7 @@ class AsyncPollingMixin:
             if self._state.is_destroyed:
                 slot.is_running = False
                 return
+            slot.is_running = True
             if slot.cancellable is not None:
                 with suppress(Exception):
                     slot.cancellable.cancel()
@@ -555,21 +559,29 @@ class AsyncPollingMixin:
 
         def on_result(output: str | None) -> None:
             with self._state.lock:
-                slot.is_running = False
                 if slot.cancellable is cancellable:
                     slot.cancellable = None
+                    slot.is_running = False
                 if self._state.is_destroyed:
                     return
             if output is not None:
                 on_output(output)
 
-        cancellable = _run_shell_async(command, timeout, on_result)
+        try:
+            cancellable = _run_shell_async(command, timeout, on_result)
+        except Exception as e:
+            log.error("Failed to execute async shell command: %s", e)
+            with self._state.lock:
+                slot.is_running = False
+            return
 
         with self._state.lock:
             if not self._state.is_destroyed and cancellable:
                 slot.cancellable = cancellable
-            elif cancellable:
-                cancellable.cancel()
+            else:
+                if cancellable:
+                    cancellable.cancel()
+                slot.is_running = False
 
 
 # =============================================================================
@@ -593,7 +605,8 @@ class DynamicIconMixin(AsyncPollingMixin):
             )
 
     def _apply_icon_update(self, new_icon: str) -> None:
-        if self.icon_widget.get_icon_name() != new_icon:
+        new_icon = new_icon.strip()
+        if new_icon and self.icon_widget.get_icon_name() != new_icon:
             self.icon_widget.set_from_icon_name(new_icon)
 
 
@@ -633,23 +646,36 @@ class StateMonitorMixin(AsyncPollingMixin):
                 monitor = gfile.monitor_file(Gio.FileMonitorFlags.NONE, None)
                 monitor.connect("changed", self._on_file_changed)
                 
+                # Note: Gio.FileMonitor is stored in the cancellable field for cleanup parity.
+                # Both FileMonitor and Cancellable expose .cancel(), enabling shared teardown logic.
                 with self._state.lock:
                     self._state.monitor.cancellable = monitor
             except Exception as e:
                 log.error(f"File monitor setup failed for {key}: {e}")
 
     def _handle_state_output(self, output: str) -> None:
-        new_state = output.lower() in TRUE_VALUES
+        new_state = output.strip().lower() in TRUE_VALUES
         self._apply_state_update(new_state)
 
-    def _on_file_changed(self, monitor: Gio.FileMonitor, file: Gio.File, other_file: Gio.File | None, event_type: Gio.FileMonitorEvent) -> None:
+    def _on_file_changed(
+        self,
+        monitor: Gio.FileMonitor,
+        file: Gio.File,
+        other_file: Gio.File | None,
+        event_type: Gio.FileMonitorEvent
+    ) -> None:
+        with self._state.lock:
+            if self._state.is_destroyed:
+                return
+
         if isinstance(self, Gtk.Widget) and not self.get_mapped():
             return
+
         if event_type in (Gio.FileMonitorEvent.CHANGES_DONE_HINT, Gio.FileMonitorEvent.CREATED):
             key = str(self.properties.get("key", "")).strip()
             val = utility.load_setting(key, default=False)
             if isinstance(val, bool):
-                GLib.idle_add(self._apply_state_update, val)
+                self._apply_state_update(val)
 
     def _apply_state_update(self, new_state: bool) -> bool:
         raise NotImplementedError
@@ -676,15 +702,18 @@ class SliderMonitorMixin(AsyncPollingMixin):
 
     def _handle_value_output(self, output: str) -> None:
         try:
-            new_value = float(output)
-            self._apply_value_update(new_value)
-        except ValueError:
-            pass
+            new_value = float(output.strip())
+        except (ValueError, OverflowError):
+            log.debug("Non-numeric or overflow value_command output: %r", output.strip())
+            return
+
+        if not math.isfinite(new_value):
+            return
+
+        self._apply_value_update(new_value)
 
     def _apply_value_update(self, new_value: float) -> bool:
         raise NotImplementedError
-
-
 # =============================================================================
 # BASE ROW CLASS
 # =============================================================================
