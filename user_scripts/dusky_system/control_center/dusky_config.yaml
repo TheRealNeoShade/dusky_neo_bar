@@ -60,12 +60,18 @@ pages:
         type: exec
         command: $HOME/user_scripts/dusky_system/reload_cc/cc_restart.sh
         terminal: false
-    - type: button
+    - type: grid_card
       properties:
         title: Dusky
         icon: system-software-update-symbolic
-        style: suggested
         badge_file: ~/.config/dusky/settings/dusky_update_behind_commit
+        button_text_file: ~/.config/dusky/settings/dusky_update_behind_commit
+        button_text_map:
+          "0": "Updated"
+          "default": "Available"
+        style_map:
+          "0": "default"
+          "default": "suggested"
       on_press:
         type: exec
         command: kitty --class update_dusky.sh --title "System Updater" --hold sh -c "$HOME/user_scripts/update_dusky/update_dusky.sh"

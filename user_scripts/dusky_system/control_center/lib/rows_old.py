@@ -1532,30 +1532,11 @@ class GridCardBase(Gtk.Button):
         self.on_action: ActionConfig = on_action or {}
         self.context: RowContext = context or {}
         self.toast_overlay: Adw.ToastOverlay | None = self.context.get("toast_overlay")
-        
         self.icon_widget: Gtk.Image | None = None
-        self.title_label: Gtk.Label | None = None
 
-        self.base_style = str(properties.get("style", "default")).lower()
-        self._current_card_style = ""
-        self._apply_base_style(self.base_style)
-
-    def _apply_base_style(self, style: str) -> None:
-        """Dynamically add/remove CSS classes based on the current style state."""
-        if style == self._current_card_style:
-            return
-            
-        if self._current_card_style == "destructive":
-            self.remove_css_class("destructive-card")
-        elif self._current_card_style == "suggested":
-            self.remove_css_class("suggested-card")
-            
-        if style == "destructive":
-            self.add_css_class("destructive-card")
-        elif style == "suggested":
-            self.add_css_class("suggested-card")
-            
-        self._current_card_style = style
+        match str(properties.get("style", "default")).lower():
+            case "destructive": self.add_css_class("destructive-card")
+            case "suggested": self.add_css_class("suggested-card")
 
     def do_unroot(self) -> None:
         self._perform_cleanup()
@@ -1575,13 +1556,13 @@ class GridCardBase(Gtk.Button):
         img.add_css_class("hero-icon")
         self.icon_widget = img
 
-        self.title_label = Gtk.Label(label=title, css_classes=["hero-title"])
-        self.title_label.set_wrap(True)
-        self.title_label.set_justify(Gtk.Justification.CENTER)
-        self.title_label.set_max_width_chars(LABEL_MAX_WIDTH_CHARS)
+        lbl = Gtk.Label(label=title, css_classes=["hero-title"])
+        lbl.set_wrap(True)
+        lbl.set_justify(Gtk.Justification.CENTER)
+        lbl.set_max_width_chars(LABEL_MAX_WIDTH_CHARS)
 
         box.append(img)
-        box.append(self.title_label)
+        box.append(lbl)
         return box
 
 
@@ -1601,12 +1582,12 @@ class GridCard(DynamicIconMixin, GridCardBase):
             _resolve_static_icon_name(icon_conf),
             str(properties.get("title", "Unnamed")),
         )
+        self.set_child(box)
+        self.connect("clicked", self._on_clicked)
 
-        # Build overlay hierarchy before attaching to prevent visual flashes
         self.badge_label: Gtk.Label | None = None
-        badge_path = properties.get("badge_file")
-        
-        if badge_path:
+        if badge_path := properties.get("badge_file"):
+            self.set_child(None)
             overlay = Gtk.Overlay()
             overlay.set_child(box)
             
@@ -1620,74 +1601,12 @@ class GridCard(DynamicIconMixin, GridCardBase):
             overlay.add_overlay(self.badge_label)
             self.set_child(overlay)
             self._start_badge_monitor(str(badge_path))
-        else:
-            self.set_child(box)
-
-        self.connect("clicked", self._on_clicked)
 
         if _is_dynamic_icon(icon_conf) and isinstance(icon_conf, dict):
             self._start_icon_update_loop(icon_conf)
 
-        # Dynamic Text and Style Polling
-        self.text_file: str | None = properties.get("button_text_file")
-        self.text_map: dict[str, str] = properties.get("button_text_map") or {}
-        self.style_map: dict[str, str] = properties.get("style_map") or {}
-        self.base_title = str(properties.get("title", "Unnamed"))
-        
-        if self.text_file:
-            self._start_dynamic_style_poll()
-
-    def _start_dynamic_style_poll(self) -> None:
-        # Fetch immediately to bypass the initial get_mapped() delay
-        _submit_task_safe(self._fetch_dynamic_state_async, self._state)
-        
-        with self._state.lock:
-            if not self._state.is_destroyed:
-                self._state.value.source_id = GLib.timeout_add_seconds(
-                    MONITOR_INTERVAL_SECONDS, self._dynamic_state_tick
-                )
-
-    def _dynamic_state_tick(self) -> bool:
-        with self._state.lock:
-            if self._state.is_destroyed:
-                return GLib.SOURCE_REMOVE
-                
-        if not self.get_mapped():
-            return GLib.SOURCE_CONTINUE
-            
-        _submit_task_safe(self._fetch_dynamic_state_async, self._state)
-        return GLib.SOURCE_CONTINUE
-
-    def _fetch_dynamic_state_async(self) -> None:
-        """Runs in the background thread pool."""
-        val: str | None = None
-        try:
-            if self.text_file:
-                path = _expand_path(self.text_file)
-                if path.exists():
-                    val = path.read_text(encoding="utf-8").strip()
-        except Exception as e: 
-            log.debug(f"Failed to read dynamic state file {self.text_file}: {e}")
-            
-        GLib.idle_add(self._apply_dynamic_state_ui, val)
-
-    def _apply_dynamic_state_ui(self, val: str | None) -> bool:
-        """Runs on the GTK main thread."""
-        with self._state.lock:
-            if self._state.is_destroyed:
-                return GLib.SOURCE_REMOVE
-                
-        if val is not None:
-            new_label = self.text_map.get(val, self.text_map.get("default", self.base_title))
-            if self.title_label and self.title_label.get_label() != new_label: 
-                self.title_label.set_label(new_label)
-                
-            new_style = self.style_map.get(val, self.style_map.get("default", self.base_style))
-            self._apply_base_style(new_style)
-            
-        return GLib.SOURCE_REMOVE
-
     def _start_badge_monitor(self, path_str: str) -> None:
+        # Use 'misc' slot for badge monitoring
         self._check_badge_tick(path_str)
         with self._state.lock:
             if self._state.is_destroyed: return
@@ -1734,6 +1653,8 @@ class GridCard(DynamicIconMixin, GridCardBase):
             case "redirect":
                 if pid := self.on_action.get("page"):
                     _perform_redirect(str(pid), self.context.get("config") or {}, self.context.get("sidebar"))
+
+
 class GridToggleCard(DynamicIconMixin, StateMonitorMixin, GridCardBase):
     __gtype_name__ = "DuskyGridToggleCard"
 
