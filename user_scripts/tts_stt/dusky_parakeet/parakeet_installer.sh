@@ -61,8 +61,8 @@ readonly DAEMON_LOG="/tmp/dusky_stt.log"
 readonly RECORD_PID_FILE="/tmp/dusky_stt_record.pid"
 readonly YAD_PID_FILE="/tmp/dusky_stt_yad.pid"
 
-AUDIO_DIR="/mnt/zram1"
-[[ ! -d "$AUDIO_DIR" ]] && AUDIO_DIR="/tmp/dusky_stt_audio"
+AUDIO_DIR="/mnt/zram1/parakeet_mic"
+[[ ! -d "/mnt/zram1" ]] && AUDIO_DIR="/tmp/dusky_stt_audio"
 readonly AUDIO_FILE="$AUDIO_DIR/stt_current.wav"
 
 get_libs() {
