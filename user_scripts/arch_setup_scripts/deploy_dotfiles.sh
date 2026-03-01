@@ -34,6 +34,10 @@ log_success() {
     printf "${C_SUCCESS}[OK]${C_RESET} %s\n" "$1"
 }
 
+log_warn() {
+    printf "${C_WARN}[WARN]${C_RESET} %s\n" "$1"
+}
+
 log_error() {
     printf "${C_ERROR}[ERROR]${C_RESET} %s\n" "$1" >&2
 }
@@ -51,6 +55,16 @@ trap cleanup EXIT
 # Main Execution
 # -----------------------------------------------------------------------------
 main() {
+    local force_mode=0
+
+    # Parse arguments
+    for arg in "$@"; do
+        if [[ "$arg" == "--force" ]] || [[ "$arg" == "-f" ]]; then
+            force_mode=1
+            break
+        fi
+    done
+
     # 1. Pre-flight Checks
     if ! command -v git &> /dev/null; then
         log_error "Git is not installed. Please run 'pacman -S git' first."
@@ -58,19 +72,23 @@ main() {
     fi
 
     # --- SAFETY INTERLOCK START ---
-    printf "\n"
-    printf "${C_WARN}!!! CRITICAL WARNING !!!${C_RESET}\n"
-    printf "${C_WARN}This script will FORCE OVERWRITE existing configuration files in %s.${C_RESET}\n" "$HOME"
-    printf "${C_WARN}All custom changes will be lost permanently.${C_RESET}\n"
-    printf "${C_WARN}NOTE: 'Orchestra' must be rerun after this process completes to finalize setup.${C_RESET}\n"
-    printf "\n"
-    
-    read -r -p "Are you sure you want to proceed? [y/N] " response
-    if [[ ! "$response" =~ ^[yY]([eE][sS])?$ ]]; then
-        log_info "Operation aborted by user."
-        exit 0
+    if [[ $force_mode -eq 0 ]]; then
+        printf "\n"
+        printf "${C_WARN}!!! CRITICAL WARNING !!!${C_RESET}\n"
+        printf "${C_WARN}This script will FORCE OVERWRITE existing configuration files in %s.${C_RESET}\n" "$HOME"
+        printf "${C_WARN}All custom changes will be lost permanently.${C_RESET}\n"
+        printf "${C_WARN}NOTE: 'Orchestra' must be rerun after this process completes to finalize setup.${C_RESET}\n"
+        printf "\n"
+        
+        read -r -p "Are you sure you want to proceed? [y/N] " response
+        if [[ ! "$response" =~ ^[yY]([eE][sS])?$ ]]; then
+            log_info "Operation aborted by user."
+            exit 0
+        fi
+        printf "\n"
+    else
+        log_warn "Running in autonomous mode (--force). Bypassing safety prompts."
     fi
-    printf "\n"
     # --- SAFETY INTERLOCK END ---
 
     log_info "Starting dotfiles bootstrap for user: $USER"
@@ -130,5 +148,5 @@ main() {
     log_info "REMINDER: Please rerun Orchestra now."
 }
 
-# Invoke main
-main
+# Invoke main and pass all script arguments to it
+main "$@"
