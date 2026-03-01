@@ -27,7 +27,7 @@ SCRIPT_SEARCH_DIRS=(
 POST_SCRIPT_DELAY=0
 
 INSTALL_SEQUENCE=(
-    "U | deploy_dotfiles.sh --force"
+#    "U | deploy_dotfiles.sh --force"
     "U | 005_hypr_custom_config_setup.sh"
     "U | 010_package_removal.sh --auto"
     "U | 015_set_thunar_terminal_kitty.sh"
